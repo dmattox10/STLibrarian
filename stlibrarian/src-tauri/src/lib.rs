@@ -1,14 +1,23 @@
-use tauri::command;
 mod core;
-use core::auth::*;
-use core::db::*;
-use core::models::ModelRecord;
-use core::scanner::*;
+
+use crate::core::auth::*;
+use crate::core::db::*;
+use crate::core::models::ModelRecord;
+use crate::core::scanner::scan_folder_with_events; // the new scanner that emits progress
+use tauri::{command, Window};
+
+// ----------------- Commands -----------------
 
 #[command]
-fn scan(path: String) {
-    let conn = open_db("stl.db").unwrap();
-    scan_folder(&conn, &path);
+async fn scan(path: String, window: Window) -> Result<(), String> {
+    let conn = open_db("stl.db").map_err(|e| e.to_string())?;
+
+    // Spawn background scan so frontend isn't blocked
+    tauri::async_runtime::spawn(async move {
+        scan_folder_with_events(&conn, &path, &window);
+    });
+
+    Ok(())
 }
 
 #[command]
@@ -22,8 +31,6 @@ fn login_cmd(user: String, pass: String) -> Option<AuthResponse> {
     login(&user, &pass)
 }
 
-// ----------------- New commands -----------------
-
 #[command]
 fn set_tags_cmd(model_id: i64, tags: Vec<String>) {
     let conn = open_db("stl.db").unwrap();
@@ -36,10 +43,13 @@ fn delete_model_cmd(model_id: i64) {
     delete_model(&conn, model_id);
 }
 
+// ----------------- Run App -----------------
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init()) // dialog plugin
         .invoke_handler(tauri::generate_handler![
-            scan,
+            scan, // only one scan now
             models,
             login_cmd,
             set_tags_cmd,
