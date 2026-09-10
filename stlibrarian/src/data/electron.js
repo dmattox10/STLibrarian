@@ -1,0 +1,56 @@
+/**
+ * Electron backend.
+ *
+ * The renderer never touches Node directly -- it talks to a `contextBridge`
+ * object the preload script exposes as `window.stlibrarian`. That bridge is the
+ * whole contract, and it is deliberately the same set of verbs the Tauri
+ * adapter implements:
+ *
+ *   window.stlibrarian = {
+ *     listModels(query), getModel(id), listTags(), stats(),
+ *     scan(path), setTags(modelId, tags), deleteModel(modelId),
+ *     getThumb(hash), putThumb(hash, dataUrl),
+ *     readModel(id) -> ArrayBuffer,
+ *     pickFolder() -> string | null,
+ *     onScanProgress(cb) -> unsubscribe,
+ *     pruneThumbs(), missingFiles(),
+ *   }
+ *
+ * Everything above `src/data/` is untouched by which shell is running, so
+ * swapping Tauri for Electron is this file plus a main process -- not a
+ * rewrite of the app.
+ */
+export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
+  if (!bridge) {
+    throw new Error("Electron preload bridge (window.stlibrarian) is not available");
+  }
+
+  return {
+    mode: "electron",
+    needsAuth: false,
+
+    async login() {
+      return { token: null, user: { id: 0, username: "local", role: "admin" } };
+    },
+    async logout() {},
+    async me() {
+      return { id: 0, username: "local", role: "admin" };
+    },
+
+    listModels: (query = {}) => bridge.listModels(query),
+    getModel: (id) => bridge.getModel(id),
+    listTags: () => bridge.listTags(),
+    stats: () => bridge.stats(),
+    scan: (path) => bridge.scan(path),
+    setTags: (modelId, tags) => bridge.setTags(modelId, tags),
+    deleteModel: (modelId) => bridge.deleteModel(modelId),
+    pruneThumbs: () => bridge.pruneThumbs?.() ?? 0,
+    missingFiles: () => bridge.missingFiles?.() ?? [],
+
+    getThumbUrl: (hash) => bridge.getThumb(hash),
+    putThumb: (hash, dataUrl) => bridge.putThumb(hash, dataUrl),
+    readModel: (id) => bridge.readModel(id),
+    pickFolder: () => bridge.pickFolder(),
+    onScanProgress: (cb) => bridge.onScanProgress?.(cb) ?? (() => {}),
+  };
+}

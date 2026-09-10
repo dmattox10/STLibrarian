@@ -1,52 +1,178 @@
-use crate::core::db::{insert_model, tag_model};
-use log::info;
+use crate::core::db::{tag_model, upsert_model, Upsert};
+use crate::core::models::ScanReport;
+use crate::core::stl;
+use log::{info, warn};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
-use std::fs;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
+use std::time::{Instant, UNIX_EPOCH};
+use walkdir::WalkDir;
 
-pub fn scan_folder(conn: &Connection, root: &str) {
-    info!("Scanning folder: {}", root);
-    walk(conn, Path::new(root));
+pub fn scan_folder(conn: &Connection, root: &str) -> ScanReport {
+    scan_folder_with(conn, root, |_| {})
 }
 
-fn walk(conn: &Connection, path: &Path) {
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                walk(conn, &p);
-            } else if is_stl(&p) {
-                index_file(conn, &p);
+/// A big library takes a while and a progress-less spinner is indistinguishable
+/// from a hang, so the caller gets a running tally.
+pub fn scan_folder_with<F>(conn: &Connection, root: &str, mut on_progress: F) -> ScanReport
+where
+    F: FnMut(&ScanReport),
+{
+    let start = Instant::now();
+    let mut report = ScanReport::default();
+    info!("Scanning folder: {}", root);
+
+    // follow_links(false) is load-bearing. The old hand-rolled recursion
+    // followed directory symlinks, so a single self-referential link -- which
+    // is ordinary on a NAS share -- walked forever.
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        if !entry.file_type().is_file() || !is_stl(entry.path()) {
+            continue;
+        }
+        match index_file(conn, entry.path()) {
+            Ok(Upsert::Added) => report.added += 1,
+            Ok(Upsert::Updated) => report.updated += 1,
+            Ok(Upsert::Unchanged) => report.unchanged += 1,
+            Err(e) => {
+                warn!("Skipped {}: {}", entry.path().display(), e);
+                report.failed += 1;
             }
         }
+
+        let seen = report.added + report.updated + report.unchanged + report.failed;
+        if seen % 25 == 0 {
+            report.elapsed_ms = start.elapsed().as_millis() as u64;
+            on_progress(&report);
+        }
     }
+
+    report.elapsed_ms = start.elapsed().as_millis() as u64;
+    info!(
+        "Scan finished: +{} ~{} ={} !{} in {}ms",
+        report.added, report.updated, report.unchanged, report.failed, report.elapsed_ms
+    );
+    on_progress(&report);
+    report
 }
 
+/// Case-insensitive on purpose: `.STL` is what most model sites hand you.
 fn is_stl(path: &Path) -> bool {
-    path.extension().map(|e| e == "stl").unwrap_or(false)
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("stl"))
+        .unwrap_or(false)
 }
 
-fn index_file(conn: &Connection, path: &Path) {
-    if let Ok(bytes) = fs::read(path) {
-        let size = bytes.len() as i64;
-        let hash = hash_bytes(&bytes);
-        let path_str = path.to_string_lossy().to_string();
-        info!("Indexing STL: {}", path_str);
-        let _ = insert_model(conn, &path_str, size, &hash);
+fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let size = meta.len() as i64;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
 
-        // assign default "untagged" tag
-        let model_id = conn
-            .query_row("SELECT id FROM models WHERE path = ?1", [path_str], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        tag_model(conn, model_id, "untagged");
+    let hash = hash_file(path).map_err(|e| e.to_string())?;
+    let geometry = stl::read_meta(path).unwrap_or_else(|_| stl::StlMeta::empty());
+    let dims = geometry.dimensions();
+    let path_str = path.to_string_lossy().to_string();
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path_str.clone());
+
+    let (model_id, outcome) = upsert_model(
+        conn,
+        &path_str,
+        &name,
+        size,
+        &hash,
+        i64::from(geometry.triangles),
+        [dims[0] as f64, dims[1] as f64, dims[2] as f64],
+        mtime,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Only a brand-new model gets the starter tag. Re-tagging on every rescan
+    // would resurrect "untagged" on models the user has since organised.
+    if outcome == Upsert::Added {
+        tag_model(conn, model_id, "untagged").map_err(|e| e.to_string())?;
     }
+
+    Ok(outcome)
 }
 
-fn hash_bytes(bytes: &[u8]) -> String {
+/// SHA-256 over a 64 KB window.
+///
+/// The previous implementation called `fs::read`, pulling the entire file into
+/// memory. Multi-hundred-megabyte STLs are routine, and a library scan would
+/// hold one of them at a time for no reason.
+fn hash_file(path: &Path) -> std::io::Result<String> {
+    let mut reader = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stl_extension_matching_is_case_insensitive() {
+        assert!(is_stl(Path::new("/a/b/Benchy.stl")));
+        assert!(is_stl(Path::new("/a/b/Benchy.STL")));
+        assert!(is_stl(Path::new("/a/b/Benchy.Stl")));
+        assert!(!is_stl(Path::new("/a/b/Benchy.3mf")));
+        assert!(!is_stl(Path::new("/a/b/stl")));
+        assert!(!is_stl(Path::new("/a/b/notes.txt")));
+    }
+
+    #[test]
+    fn hash_is_stable_and_content_dependent() {
+        let dir = std::env::temp_dir();
+        let a = dir.join(format!("stlib_hash_a_{}", std::process::id()));
+        let b = dir.join(format!("stlib_hash_b_{}", std::process::id()));
+        std::fs::write(&a, b"hello world").unwrap();
+        std::fs::write(&b, b"hello worlds").unwrap();
+        let ha = hash_file(&a).unwrap();
+        assert_eq!(ha, hash_file(&a).unwrap());
+        assert_ne!(ha, hash_file(&b).unwrap());
+        // Known SHA-256 of "hello world" -- proves the streaming loop actually
+        // feeds every byte, in order, exactly once.
+        assert_eq!(
+            ha,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        std::fs::remove_file(a).ok();
+        std::fs::remove_file(b).ok();
+    }
+
+    #[test]
+    fn hashing_spans_multiple_buffer_windows() {
+        // Larger than the 64 KB read window, so a loop that dropped or
+        // double-counted a chunk would show up here.
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!("stlib_hash_big_{}", std::process::id()));
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&p, &data).unwrap();
+        let mut expected = Sha256::new();
+        expected.update(&data);
+        assert_eq!(hash_file(&p).unwrap(), format!("{:x}", expected.finalize()));
+        std::fs::remove_file(p).ok();
+    }
 }
