@@ -4,6 +4,8 @@ import Sidebar from "./components/Sidebar.jsx";
 import LibraryGrid from "./components/LibraryGrid.jsx";
 import Inspector from "./components/Inspector.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
+import BulkBar from "./components/BulkBar.jsx";
+import { useSelection } from "./lib/useSelection.js";
 import { useThumbnails } from "./lib/useThumbnails.js";
 import {
   Alert,
@@ -35,11 +37,13 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [activeTags, setActiveTags] = useState([]);
+  const [activeCollection, setActiveCollection] = useState(null);
   const [sort, setSort] = useState("recent");
   const [cardSize, setCardSize] = useState(190);
 
   const [models, setModels] = useState([]);
   const [tags, setTags] = useState([]);
+  const [collections, setCollections] = useState([]);
   const [stats, setStats] = useState(EMPTY_STATS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -65,8 +69,14 @@ export default function App() {
   }, [search]);
 
   const query = useMemo(
-    () => ({ search: debouncedSearch, tags: activeTags, sort, limit: 500 }),
-    [debouncedSearch, activeTags, sort]
+    () => ({
+      search: debouncedSearch,
+      tags: activeTags,
+      collection: activeCollection,
+      sort,
+      limit: 500,
+    }),
+    [debouncedSearch, activeTags, activeCollection, sort]
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
@@ -78,13 +88,14 @@ export default function App() {
     let cancelled = false;
     setLoading(true);
 
-    Promise.all([api.listModels(query), api.listTags(), api.stats()])
-      .then(([nextModels, nextTags, nextStats]) => {
+    Promise.all([api.listModels(query), api.listTags(), api.stats(), api.collections()])
+      .then(([nextModels, nextTags, nextStats, nextCollections]) => {
         // Out-of-order responses must not overwrite a newer result.
         if (cancelled || requestId.current !== mine) return;
         setModels(nextModels);
         setTags(nextTags);
         setStats(nextStats);
+        setCollections(nextCollections);
         setError(null);
       })
       .catch((e) => {
@@ -112,6 +123,16 @@ export default function App() {
   }, [models, selected]);
 
   const thumbs = useThumbnails(api, models);
+  const { marked, click, selectAll, clear } = useSelection(models, setSelected);
+
+  // Escape is the universal "never mind" for a selection.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") clear();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clear]);
 
   const toggleTag = useCallback((name) => {
     setActiveTags((current) =>
@@ -130,7 +151,8 @@ export default function App() {
   }
 
   const isAdmin = session.user?.role === "admin";
-  const filtered = activeTags.length > 0 || debouncedSearch;
+  const filtered = activeTags.length > 0 || debouncedSearch || activeCollection != null;
+  const markedIds = [...marked];
 
   return (
     <div className="app">
@@ -192,6 +214,9 @@ export default function App() {
           tags={tags}
           activeTags={activeTags}
           onToggleTag={toggleTag}
+          collections={collections}
+          activeCollection={activeCollection}
+          onSelectCollection={setActiveCollection}
           stats={stats}
           onRefresh={refresh}
           canScan={isAdmin}
@@ -210,7 +235,8 @@ export default function App() {
             models={models}
             thumbs={thumbs}
             selected={selected}
-            onSelect={setSelected}
+            marked={marked}
+            onSelect={click}
             cardSize={cardSize}
             loading={loading}
             emptyState={
@@ -224,6 +250,7 @@ export default function App() {
                         onClick={() => {
                           setSearch("");
                           setActiveTags([]);
+                          setActiveCollection(null);
                         }}
                       >
                         Clear filters
@@ -237,6 +264,16 @@ export default function App() {
                       : "No models have been added to this server yet.",
                   }
             }
+          />
+
+          <BulkBar
+            api={api}
+            ids={markedIds}
+            collections={collections}
+            total={models.length}
+            onDone={refresh}
+            onClear={clear}
+            onSelectAll={selectAll}
           />
         </div>
 

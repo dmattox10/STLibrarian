@@ -749,3 +749,176 @@
   width: 100%;
   max-width: 340px;
 }
+
+/* -------------------------------------------------------------- bulk bar -- */
+
+/* Sticky to the bottom of the scrolling stage: the selection stays reachable
+   however far down the grid you have scrolled to build it. */
+.bulkbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--nord3);
+  /* Nearly opaque: grid cards scroll underneath it. */
+  background: linear-gradient(180deg, rgba(59, 66, 82, 0.97), rgba(46, 52, 64, 0.97));
+  box-shadow:
+    inset 0 1px 0 var(--bevel-top),
+    0 -8px 26px rgba(0, 0, 0, 0.5);
+}
+
+/* A lit edge, so an active selection reads as armed rather than as chrome. */
+.bulkbar::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--nord10), var(--nord8), var(--nord10));
+  box-shadow: 0 0 14px var(--glow);
+}
+
+.bulkbar__count {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--nord8);
+  white-space: nowrap;
+}
+
+.bulkbar__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--sub1);
+}
+
+.bulkbar__spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.bulkbar__note {
+  font-size: 11px;
+  color: var(--nord14);
+  white-space: nowrap;
+}
+
+.bulkbar__note--error {
+  color: #e5a2a8;
+}
+
+@media (max-width: 900px) {
+  .bulkbar__group {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* ------------------------------------------------------- marked cards ----- */
+
+.gc-card--marked {
+  border-color: var(--nord8);
+  background: linear-gradient(180deg, rgba(94, 129, 172, 0.35), var(--nord0));
+}
+
+.gc-card__check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--nord0);
+  background: linear-gradient(180deg, var(--nord8), var(--nord9));
+  box-shadow: 0 0 12px var(--glow), inset 0 1px 0 rgba(236, 239, 244, 0.5);
+}
+
+/* ----------------------------------------------------- collection rows ---- */
+
+.collrow {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid transparent;
+}
+
+.collrow:hover {
+  border-color: var(--nord3);
+  background: rgba(67, 76, 94, 0.45);
+}
+
+.collrow__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collrow__main[aria-pressed="true"] {
+  color: var(--nord0);
+  background: linear-gradient(180deg, var(--nord8), var(--nord9));
+  box-shadow: 0 0 12px var(--glow-soft);
+}
+
+.collrow__main:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--glow);
+}
+
+.collrow__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.collrow__count {
+  font-size: 10.5px;
+  opacity: 0.8;
+}
+
+.collrow__x {
+  flex: none;
+  width: 24px;
+  border: 0;
+  background: none;
+  color: var(--ink-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  /* Hidden until the row is hovered: deleting a collection should take
+     intent, not a stray click while scanning the list. */
+  opacity: 0;
+  transition: opacity var(--speed) ease, color var(--speed) ease;
+}
+
+.collrow:hover .collrow__x,
+.collrow__x:focus-visible {
+  opacity: 1;
+}
+
+.collrow__x:hover {
+  color: var(--nord11);
+}

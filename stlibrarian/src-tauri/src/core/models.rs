@@ -18,6 +18,9 @@ pub struct ModelRecord {
     pub has_thumb: bool,
     pub mtime: i64,
     pub tags: Vec<String>,
+    /// Names of the collections holding this model. Denormalised onto the row
+    /// so the inspector can show membership without a second round trip.
+    pub collections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +51,9 @@ pub struct LibraryQuery {
     /// A model must carry *every* tag listed here, not any of them. Narrowing
     /// is what a filter is for.
     pub tags: Vec<String>,
+    /// Restrict to one collection. Combines with search and tags rather than
+    /// replacing them, so you can search inside a collection.
+    pub collection: Option<i64>,
     pub sort: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -69,4 +75,21 @@ pub struct LibraryStats {
     pub tags: i64,
     pub missing: i64,
     pub without_thumb: i64,
+}
+
+/// A curated, named set of models.
+///
+/// Distinct from a tag on purpose: a tag describes a property every member
+/// happens to share, a collection is simply the set of things you put in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub count: i64,
+}
+
+/// How many rows a bulk operation actually changed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BulkResult {
+    pub changed: usize,
 }

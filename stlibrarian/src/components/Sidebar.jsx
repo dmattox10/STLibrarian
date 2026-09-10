@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Field, FolderIcon, Meter, Panel, TagChip } from "./controls/index.jsx";
+import CollectionsPanel from "./CollectionsPanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -90,10 +91,29 @@ function ScanPanel({ api, onComplete }) {
   );
 }
 
-export default function Sidebar({ api, tags, activeTags, onToggleTag, stats, onRefresh, canScan }) {
+export default function Sidebar({
+  api,
+  tags,
+  activeTags,
+  onToggleTag,
+  collections,
+  activeCollection,
+  onSelectCollection,
+  stats,
+  onRefresh,
+  canScan,
+}) {
   return (
     <>
       {canScan ? <ScanPanel api={api} onComplete={onRefresh} /> : null}
+
+      <CollectionsPanel
+        api={api}
+        collections={collections}
+        activeCollection={activeCollection}
+        onSelect={onSelectCollection}
+        onChanged={onRefresh}
+      />
 
       <Panel
         title="Tags"

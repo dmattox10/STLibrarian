@@ -45,7 +45,10 @@ export default function StlViewer({ api, model }) {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.enablePan = false;
+    // Panning matters once you are zoomed in on one feature; Reset recovers
+    // the framing if you lose the model off screen.
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
 
     const state = { renderer, scene, camera, controls, mesh: null, spin: true, radius: 1 };
     sceneRef.current = state;

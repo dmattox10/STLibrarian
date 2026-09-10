@@ -30,6 +30,18 @@ export function createTauriAdapter() {
     setTags: (modelId, tags) => invoke("set_tags", { modelId, tags }),
     deleteModel: (modelId) => invoke("delete_model", { modelId }),
     pruneThumbs: () => invoke("prune_thumbs"),
+
+    collections: () => invoke("collections"),
+    createCollection: (name) => invoke("create_collection", { name }),
+    renameCollection: (id, name) => invoke("rename_collection", { id, name }),
+    deleteCollection: (id) => invoke("delete_collection", { id }),
+    addToCollection: (collectionId, modelIds) =>
+      invoke("add_to_collection", { collectionId, modelIds }),
+    removeFromCollection: (collectionId, modelIds) =>
+      invoke("remove_from_collection", { collectionId, modelIds }),
+
+    bulkAddTag: (modelIds, tag) => invoke("bulk_add_tag", { modelIds, tag }),
+    bulkRemoveTag: (modelIds, tag) => invoke("bulk_remove_tag", { modelIds, tag }),
     missingFiles: () => invoke("missing_files"),
 
     // Returns a data: URL, which drops straight into an <img src>.

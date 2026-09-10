@@ -32,11 +32,37 @@ shown once and never stored in plaintext, so save it then.
 | `STLIBRARIAN_BIND` | `0.0.0.0:3000` | Server listen address |
 | `STLIBRARIAN_WEB_ROOT` | `../dist` | Built front end to serve |
 
+## Organising a library
+
+**Tags** describe a property the members share. Type one in the inspector, or
+apply one to a whole selection at once. Filtering by several tags narrows
+(AND), so `dragons` + `printed` means both, not either.
+
+**Collections** are named sets you build by hand — Dragons, Needs Supports,
+Christmas Gifts. A model can sit in any number of them. They are a different
+idea from tags on purpose: a tag is something the members have in common, a
+collection is simply what you put in it.
+
+Selection follows the conventions every file manager uses:
+
+| Gesture | Effect |
+| --- | --- |
+| click | open one model in the inspector |
+| cmd/ctrl-click | add or remove one model from the selection |
+| shift-click | extend the selection from the last anchor |
+| arrow keys | move the inspector focus through the grid |
+| escape | clear the selection |
+
+With anything selected, a bar appears at the bottom of the grid: add or remove
+a tag across the whole selection, or add it to (or take it out of) a
+collection. It reports what actually changed, so "tagged 12" of a selection of
+40 tells you the other 28 already had it.
+
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --no-default-features --lib   # core: 21 tests
-tools/e2e.sh                                             # server + API: 21 checks
+cd src-tauri && cargo test --no-default-features --lib   # core: 36 tests
+tools/e2e.sh                                             # server + API: 47 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
@@ -58,7 +84,7 @@ src/
 
 src-tauri/src/
   core/          shared by both binaries, depends on neither
-    db.rs          SQLite: models, tags, users, sessions
+    db.rs          SQLite: models, tags, collections, users, sessions
     scanner.rs     streaming walk and hash
     stl.rs         triangle count and bounding box, streaming
     auth.rs        argon2 passwords, session tokens
@@ -90,6 +116,12 @@ Thumbnails are rendered in the front end with three.js and cached as PNGs keyed
 by the model's content hash, so a preview can never go stale — a changed file is
 a different hash. Rendering is strictly sequential: each one means reading a
 whole STL, and there is only one GPU context to share.
+
+### Orbiting a model
+
+Left-drag orbits, scroll zooms, right-drag pans, and Reset re-frames if you
+lose the model off screen. Auto-spin rotates the mesh rather than the camera,
+so it does not fight an orbit you set yourself.
 
 ## Design language
 

@@ -13,13 +13,13 @@ use axum::extract::{Path, Query, Request};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
-    LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount, User,
+    Collection, LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount, User,
 };
 use stlibrarian_lib::core::{auth, db, paths, scanner, thumbs};
 use tokio_util::io::ReaderStream;
@@ -162,6 +162,7 @@ async fn me_route(Extension(user): Extension<User>) -> Json<User> {
 struct ModelsParams {
     search: Option<String>,
     tags: Option<String>,
+    collection: Option<i64>,
     sort: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -178,6 +179,7 @@ impl From<ModelsParams> for LibraryQuery {
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty())
                 .collect(),
+            collection: p.collection,
             sort: p.sort,
             limit: p.limit,
             offset: p.offset,
@@ -279,6 +281,107 @@ async fn scan_route(
         .map(Json)
 }
 
+// ----------------------------------------------------------- collections ----
+
+#[derive(Deserialize)]
+struct NameReq {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct ModelIdsReq {
+    model_ids: Vec<i64>,
+}
+
+#[derive(Deserialize)]
+struct BulkTagReq {
+    model_ids: Vec<i64>,
+    tag: String,
+}
+
+#[derive(Serialize)]
+struct Changed {
+    changed: usize,
+}
+
+async fn collections_route() -> Result<Json<Vec<Collection>>, ApiError> {
+    with_db(|conn| db::list_collections(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn create_collection_route(Json(req): Json<NameReq>) -> Result<Json<Collection>, ApiError> {
+    // A duplicate name is the user's mistake, not the server's, so it comes
+    // back as 400 with the message rather than a 500.
+    let made = tokio::task::spawn_blocking(move || {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::create_collection(&conn, &req.name)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+
+    made.map(Json).map_err(bad)
+}
+
+async fn rename_collection_route(
+    Path(id): Path<i64>,
+    Json(req): Json<NameReq>,
+) -> Result<StatusCode, ApiError> {
+    let done = tokio::task::spawn_blocking(move || {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::rename_collection(&conn, id, &req.name)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
+async fn delete_collection_route(Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| db::delete_collection(conn, id).map_err(|e| e.to_string())).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn add_to_collection_route(
+    Path(id): Path<i64>,
+    Json(req): Json<ModelIdsReq>,
+) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| {
+        db::add_to_collection(conn, id, &req.model_ids).map_err(|e| e.to_string())
+    })
+    .await
+    .map(|changed| Json(Changed { changed }))
+}
+
+async fn remove_from_collection_route(
+    Path(id): Path<i64>,
+    Json(req): Json<ModelIdsReq>,
+) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| {
+        db::remove_from_collection(conn, id, &req.model_ids).map_err(|e| e.to_string())
+    })
+    .await
+    .map(|changed| Json(Changed { changed }))
+}
+
+// ------------------------------------------------------------- bulk tags ----
+
+async fn bulk_add_tag_route(Json(req): Json<BulkTagReq>) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| {
+        db::add_tag_to_models(conn, &req.model_ids, &req.tag).map_err(|e| e.to_string())
+    })
+    .await
+    .map(|changed| Json(Changed { changed }))
+}
+
+async fn bulk_remove_tag_route(Json(req): Json<BulkTagReq>) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| {
+        db::remove_tag_from_models(conn, &req.model_ids, &req.tag).map_err(|e| e.to_string())
+    })
+    .await
+    .map(|changed| Json(Changed { changed }))
+}
+
 // ------------------------------------------------------------ thumbnails ----
 
 async fn get_thumb_route(Path(hash): Path<String>) -> Result<Response, ApiError> {
@@ -353,6 +456,16 @@ async fn main() {
         .route("/models/{id}/file", get(model_file_route))
         .route("/models/{id}/tags", post(set_tags_route))
         .route("/tags", get(tags_route))
+        .route("/collections", get(collections_route))
+        .route("/collections", post(create_collection_route))
+        .route("/collections/{id}", patch(rename_collection_route))
+        .route("/collections/{id}", delete(delete_collection_route))
+        .route("/collections/{id}/models", post(add_to_collection_route))
+        .route("/collections/{id}/models/remove", post(remove_from_collection_route))
+        // Under /bulk rather than /models so a selection operation can never
+        // be confused with a route addressing one model by id.
+        .route("/bulk/tags/add", post(bulk_add_tag_route))
+        .route("/bulk/tags/remove", post(bulk_remove_tag_route))
         .route("/stats", get(stats_route))
         .route("/scan", post(scan_route))
         .route("/thumb/{hash}", get(get_thumb_route))

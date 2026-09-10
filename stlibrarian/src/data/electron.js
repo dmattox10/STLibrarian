@@ -10,6 +10,11 @@
  *     listModels(query), getModel(id), listTags(), stats(),
  *     scan(path), setTags(modelId, tags), deleteModel(modelId),
  *     getThumb(hash), putThumb(hash, dataUrl),
+ *     collections(), createCollection(name), renameCollection(id, name),
+ *     deleteCollection(id),
+ *     addToCollection(collectionId, modelIds),
+ *     removeFromCollection(collectionId, modelIds),
+ *     bulkAddTag(modelIds, tag), bulkRemoveTag(modelIds, tag),
  *     readModel(id) -> ArrayBuffer,
  *     pickFolder() -> string | null,
  *     onScanProgress(cb) -> unsubscribe,
@@ -46,6 +51,17 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     deleteModel: (modelId) => bridge.deleteModel(modelId),
     pruneThumbs: () => bridge.pruneThumbs?.() ?? 0,
     missingFiles: () => bridge.missingFiles?.() ?? [],
+
+    collections: () => bridge.collections(),
+    createCollection: (name) => bridge.createCollection(name),
+    renameCollection: (id, name) => bridge.renameCollection(id, name),
+    deleteCollection: (id) => bridge.deleteCollection(id),
+    addToCollection: (collectionId, modelIds) => bridge.addToCollection(collectionId, modelIds),
+    removeFromCollection: (collectionId, modelIds) =>
+      bridge.removeFromCollection(collectionId, modelIds),
+
+    bulkAddTag: (modelIds, tag) => bridge.bulkAddTag(modelIds, tag),
+    bulkRemoveTag: (modelIds, tag) => bridge.bulkRemoveTag(modelIds, tag),
 
     getThumbUrl: (hash) => bridge.getThumb(hash),
     putThumb: (hash, dataUrl) => bridge.putThumb(hash, dataUrl),

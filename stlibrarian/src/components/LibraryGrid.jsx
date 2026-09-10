@@ -6,7 +6,16 @@ import { CubeIcon } from "./controls/index.jsx";
  * The library. Arrow keys move the selection the way a console UI would --
  * the grid is a single focus stop and the caret moves inside it.
  */
-export default function LibraryGrid({ models, thumbs, selected, onSelect, cardSize, loading, emptyState }) {
+export default function LibraryGrid({
+  models,
+  thumbs,
+  selected,
+  marked,
+  onSelect,
+  cardSize,
+  loading,
+  emptyState,
+}) {
   const gridRef = useRef(null);
 
   useEffect(() => {
@@ -30,7 +39,7 @@ export default function LibraryGrid({ models, thumbs, selected, onSelect, cardSi
 
       if (next !== current) {
         event.preventDefault();
-        onSelect(models[next]);
+        onSelect(models[next], next, { shiftKey: false, metaKey: false, ctrlKey: false });
         grid.children[next]?.scrollIntoView({ block: "nearest" });
       }
     };
@@ -57,14 +66,17 @@ export default function LibraryGrid({ models, thumbs, selected, onSelect, cardSi
       style={{ "--card-size": `${cardSize}px` }}
       role="listbox"
       aria-label="Model library"
+      aria-multiselectable="true"
       aria-busy={loading}
     >
-      {models.map((model) => (
+      {models.map((model, index) => (
         <ModelCard
           key={model.id}
           model={model}
+          index={index}
           thumb={thumbs[model.hash]}
           selected={selected?.id === model.id}
+          marked={marked.has(model.id)}
           onSelect={onSelect}
         />
       ))}

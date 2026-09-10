@@ -1,5 +1,7 @@
 use crate::core::db;
-use crate::core::models::{LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount};
+use crate::core::models::{
+    Collection, LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount,
+};
 use crate::core::paths;
 use crate::core::scanner;
 use crate::core::thumbs;
@@ -60,6 +62,58 @@ fn set_tags(model_id: i64, tags: Vec<String>) -> Result<(), String> {
 fn delete_model(model_id: i64) -> Result<(), String> {
     let c = conn()?;
     db::delete_model(&c, model_id).map_err(|e| e.to_string())
+}
+
+// --------------------------------------------------------- collections ----
+
+#[command]
+fn collections() -> Result<Vec<Collection>, String> {
+    let c = conn()?;
+    db::list_collections(&c).map_err(|e| e.to_string())
+}
+
+#[command]
+fn create_collection(name: String) -> Result<Collection, String> {
+    let c = conn()?;
+    db::create_collection(&c, &name)
+}
+
+#[command]
+fn rename_collection(id: i64, name: String) -> Result<(), String> {
+    let c = conn()?;
+    db::rename_collection(&c, id, &name)
+}
+
+#[command]
+fn delete_collection(id: i64) -> Result<(), String> {
+    let c = conn()?;
+    db::delete_collection(&c, id).map_err(|e| e.to_string())
+}
+
+#[command]
+fn add_to_collection(collection_id: i64, model_ids: Vec<i64>) -> Result<usize, String> {
+    let c = conn()?;
+    db::add_to_collection(&c, collection_id, &model_ids).map_err(|e| e.to_string())
+}
+
+#[command]
+fn remove_from_collection(collection_id: i64, model_ids: Vec<i64>) -> Result<usize, String> {
+    let c = conn()?;
+    db::remove_from_collection(&c, collection_id, &model_ids).map_err(|e| e.to_string())
+}
+
+// ----------------------------------------------------------- bulk tags ----
+
+#[command]
+fn bulk_add_tag(model_ids: Vec<i64>, tag: String) -> Result<usize, String> {
+    let c = conn()?;
+    db::add_tag_to_models(&c, &model_ids, &tag).map_err(|e| e.to_string())
+}
+
+#[command]
+fn bulk_remove_tag(model_ids: Vec<i64>, tag: String) -> Result<usize, String> {
+    let c = conn()?;
+    db::remove_tag_from_models(&c, &model_ids, &tag).map_err(|e| e.to_string())
 }
 
 #[command]
@@ -148,6 +202,14 @@ pub fn run() {
             scan,
             set_tags,
             delete_model,
+            collections,
+            create_collection,
+            rename_collection,
+            delete_collection,
+            add_to_collection,
+            remove_from_collection,
+            bulk_add_tag,
+            bulk_remove_tag,
             get_thumb,
             put_thumb,
             read_model,

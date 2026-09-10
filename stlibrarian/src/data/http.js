@@ -61,6 +61,7 @@ export function createHttpAdapter(baseUrl = "") {
     const params = new URLSearchParams();
     if (query.search) params.set("search", query.search);
     if (query.tags?.length) params.set("tags", query.tags.join(","));
+    if (query.collection != null) params.set("collection", String(query.collection));
     if (query.sort) params.set("sort", query.sort);
     if (query.limit != null) params.set("limit", String(query.limit));
     if (query.offset != null) params.set("offset", String(query.offset));
@@ -110,6 +111,28 @@ export function createHttpAdapter(baseUrl = "") {
     async pruneThumbs() {
       return 0;
     },
+
+    collections: () => request("/api/collections"),
+    createCollection: (name) =>
+      request("/api/collections", { method: "POST", body: { name } }),
+    renameCollection: (id, name) =>
+      request(`/api/collections/${id}`, { method: "PATCH", body: { name } }),
+    deleteCollection: (id) => request(`/api/collections/${id}`, { method: "DELETE" }),
+    addToCollection: (collectionId, modelIds) =>
+      request(`/api/collections/${collectionId}/models`, {
+        method: "POST",
+        body: { model_ids: modelIds },
+      }),
+    removeFromCollection: (collectionId, modelIds) =>
+      request(`/api/collections/${collectionId}/models/remove`, {
+        method: "POST",
+        body: { model_ids: modelIds },
+      }),
+
+    bulkAddTag: (modelIds, tag) =>
+      request("/api/bulk/tags/add", { method: "POST", body: { model_ids: modelIds, tag } }),
+    bulkRemoveTag: (modelIds, tag) =>
+      request("/api/bulk/tags/remove", { method: "POST", body: { model_ids: modelIds, tag } }),
     async missingFiles() {
       return [];
     },

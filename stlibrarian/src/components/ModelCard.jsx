@@ -1,15 +1,20 @@
 import { CubeIcon, TagChip } from "./controls/index.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
-export default function ModelCard({ model, thumb, selected, onSelect }) {
+export default function ModelCard({ model, thumb, selected, marked, index, onSelect }) {
   return (
     <button
       type="button"
-      className="gc-card"
-      aria-selected={selected}
-      onClick={() => onSelect(model)}
+      className={`gc-card${marked ? " gc-card--marked" : ""}`}
+      aria-selected={marked || selected}
+      onClick={(event) => onSelect(model, index, event)}
       title={model.path}
     >
+      {marked ? (
+        <span className="gc-card__check" aria-hidden="true">
+          &#10003;
+        </span>
+      ) : null}
       <span className="gc-card__thumb">
         {thumb ? (
           // Decorative: the name directly below says what this is, so a

@@ -153,6 +153,22 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
         <TagEditor model={model} api={api} onChanged={onChanged} />
       </Panel>
 
+      <Panel title="Collections">
+        {model.collections?.length ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {model.collections.map((name) => (
+              <span className="gc-badge" key={name}>
+                {name}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="dim" style={{ fontSize: 11, lineHeight: 1.5 }}>
+            Not in any collection. Select models in the grid to add them.
+          </span>
+        )}
+      </Panel>
+
       {canDelete ? (
         <Panel title="Danger zone">
           <div className="stack">

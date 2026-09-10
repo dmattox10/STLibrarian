@@ -1,4 +1,4 @@
-use crate::core::models::{LibraryQuery, ModelRecord, TagCount};
+use crate::core::models::{Collection, LibraryQuery, ModelRecord, TagCount};
 use log::error;
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::collections::HashMap;
@@ -59,6 +59,17 @@ fn migrate(conn: &Connection) -> Result<()> {
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS collections (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT UNIQUE NOT NULL COLLATE NOCASE,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS collection_models (
+            collection_id INTEGER NOT NULL,
+            model_id      INTEGER NOT NULL,
+            added_at      INTEGER NOT NULL,
+            UNIQUE(collection_id, model_id)
+        );
         CREATE TABLE IF NOT EXISTS sessions (
             token      TEXT PRIMARY KEY,
             user_id    INTEGER NOT NULL,
@@ -94,6 +105,8 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_model_tags_model ON model_tags(model_id);
         CREATE INDEX IF NOT EXISTS idx_model_tags_tag ON model_tags(tag_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_coll_models_coll ON collection_models(collection_id);
+        CREATE INDEX IF NOT EXISTS idx_coll_models_model ON collection_models(model_id);
         ",
     )?;
     Ok(())
@@ -180,6 +193,13 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
         binds.push(Box::new(tags.len() as i64));
     }
 
+    if let Some(collection_id) = q.collection {
+        sql.push_str(
+            " AND id IN (SELECT model_id FROM collection_models WHERE collection_id = ?)",
+        );
+        binds.push(Box::new(collection_id));
+    }
+
     // Whitelisted, because this goes into the SQL string.
     sql.push_str(match q.sort.as_deref() {
         Some("name") => " ORDER BY name COLLATE NOCASE ASC",
@@ -212,6 +232,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             mtime: row.get(9)?,
             has_thumb: row.get::<_, i64>(10)? != 0,
             tags: Vec::new(),
+            collections: Vec::new(),
         })
     })?;
 
@@ -227,6 +248,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
     // statement inside the row callback -- a query per model, which is what
     // made a large library crawl.
     attach_tags(conn, &mut results)?;
+    attach_collections(conn, &mut results)?;
     Ok(results)
 }
 
@@ -277,6 +299,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     mtime: row.get(9)?,
                     has_thumb: row.get::<_, i64>(10)? != 0,
                     tags: Vec::new(),
+                    collections: Vec::new(),
                 })
             },
         )
@@ -286,6 +309,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
         Some(m) => {
             let mut one = vec![m];
             attach_tags(conn, &mut one)?;
+            attach_collections(conn, &mut one)?;
             Ok(one.pop())
         }
         None => Ok(None),
@@ -349,6 +373,12 @@ pub fn delete_model(conn: &Connection, model_id: i64) -> Result<()> {
         "DELETE FROM model_tags WHERE model_id = ?1",
         params![model_id],
     )?;
+    // Otherwise a deleted model leaves a row pointing at nothing, and every
+    // collection count that included it stays permanently wrong.
+    conn.execute(
+        "DELETE FROM collection_models WHERE model_id = ?1",
+        params![model_id],
+    )?;
     conn.execute("DELETE FROM models WHERE id = ?1", params![model_id])?;
     Ok(())
 }
@@ -394,4 +424,503 @@ pub fn all_hashes(conn: &Connection) -> Result<std::collections::HashSet<String>
     let mut stmt = conn.prepare("SELECT hash FROM models")?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
     Ok(rows.flatten().collect())
+}
+
+// ----------------------------------------------------------- collections ----
+
+fn attach_collections(conn: &Connection, models: &mut [ModelRecord]) -> Result<()> {
+    if models.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = models.iter().map(|m| m.id.to_string()).collect();
+    // Safe to interpolate: these are i64 read back out of the same table.
+    let sql = format!(
+        "SELECT cm.model_id, c.name
+         FROM collection_models cm JOIN collections c ON c.id = cm.collection_id
+         WHERE cm.model_id IN ({})
+         ORDER BY c.name COLLATE NOCASE",
+        ids.join(",")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut by_id: HashMap<i64, Vec<String>> = HashMap::new();
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows.flatten() {
+        by_id.entry(row.0).or_default().push(row.1);
+    }
+    for m in models.iter_mut() {
+        if let Some(names) = by_id.remove(&m.id) {
+            m.collections = names;
+        }
+    }
+    Ok(())
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn create_collection(conn: &Connection, name: &str) -> std::result::Result<Collection, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A collection needs a name".into());
+    }
+    if name.len() > 120 {
+        return Err("That name is too long".into());
+    }
+    conn.execute(
+        "INSERT INTO collections (name, created_at) VALUES (?1, ?2)",
+        params![name, now()],
+    )
+    .map_err(|e| {
+        // The name column is UNIQUE COLLATE NOCASE, so "Dragons" and "dragons"
+        // collide. Say so plainly instead of surfacing a constraint error.
+        if e.to_string().contains("UNIQUE") {
+            format!("A collection called \"{}\" already exists", name)
+        } else {
+            format!("Could not create collection: {}", e)
+        }
+    })?;
+    Ok(Collection {
+        id: conn.last_insert_rowid(),
+        name: name.to_string(),
+        count: 0,
+    })
+}
+
+pub fn rename_collection(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+) -> std::result::Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A collection needs a name".into());
+    }
+    conn.execute(
+        "UPDATE collections SET name = ?2 WHERE id = ?1",
+        params![id, name],
+    )
+    .map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            format!("A collection called \"{}\" already exists", name)
+        } else {
+            format!("Could not rename collection: {}", e)
+        }
+    })?;
+    Ok(())
+}
+
+/// Removes the collection, not the models in it.
+pub fn delete_collection(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM collection_models WHERE collection_id = ?1",
+        params![id],
+    )?;
+    conn.execute("DELETE FROM collections WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Every collection with its size. Unlike tags, empty collections are kept --
+/// you make one before you fill it.
+pub fn list_collections(conn: &Connection) -> Result<Vec<Collection>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.name, COUNT(cm.model_id)
+         FROM collections c
+         LEFT JOIN collection_models cm ON cm.collection_id = c.id
+         GROUP BY c.id
+         ORDER BY c.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Collection {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            count: r.get(2)?,
+        })
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+pub fn add_to_collection(conn: &Connection, collection_id: i64, model_ids: &[i64]) -> Result<usize> {
+    if model_ids.is_empty() {
+        return Ok(0);
+    }
+    // One transaction for the whole selection: tagging forty models is one
+    // action to the user and should be one to the database.
+    let tx = conn.unchecked_transaction()?;
+    let mut changed = 0;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR IGNORE INTO collection_models (collection_id, model_id, added_at)
+             VALUES (?1, ?2, ?3)",
+        )?;
+        let stamp = now();
+        for id in model_ids {
+            changed += stmt.execute(params![collection_id, id, stamp])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+pub fn remove_from_collection(
+    conn: &Connection,
+    collection_id: i64,
+    model_ids: &[i64],
+) -> Result<usize> {
+    if model_ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut changed = 0;
+    {
+        let mut stmt =
+            tx.prepare("DELETE FROM collection_models WHERE collection_id = ?1 AND model_id = ?2")?;
+        for id in model_ids {
+            changed += stmt.execute(params![collection_id, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+// ------------------------------------------------------------- bulk tags ----
+
+pub fn add_tag_to_models(conn: &Connection, model_ids: &[i64], tag: &str) -> Result<usize> {
+    let tag = tag.trim();
+    if tag.is_empty() || model_ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let tag_id = add_tag(&tx, tag)?;
+    let mut changed = 0;
+    {
+        let mut stmt =
+            tx.prepare("INSERT OR IGNORE INTO model_tags (model_id, tag_id) VALUES (?1, ?2)")?;
+        for id in model_ids {
+            changed += stmt.execute(params![id, tag_id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+pub fn remove_tag_from_models(conn: &Connection, model_ids: &[i64], tag: &str) -> Result<usize> {
+    let tag = tag.trim();
+    if tag.is_empty() || model_ids.is_empty() {
+        return Ok(0);
+    }
+    let tag_id: Option<i64> = conn
+        .query_row("SELECT id FROM tags WHERE name = ?1", params![tag], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let tag_id = match tag_id {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let mut changed = 0;
+    {
+        let mut stmt = tx.prepare("DELETE FROM model_tags WHERE model_id = ?1 AND tag_id = ?2")?;
+        for id in model_ids {
+            changed += stmt.execute(params![id, tag_id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// A real on-disk database that removes itself, WAL sidecars included.
+    struct TempDb {
+        conn: Connection,
+        path: std::path::PathBuf,
+    }
+
+    impl std::ops::Deref for TempDb {
+        type Target = Connection;
+        fn deref(&self) -> &Connection {
+            &self.conn
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{}", self.path.display(), suffix));
+            }
+        }
+    }
+
+    fn db() -> TempDb {
+        let path = std::env::temp_dir().join(format!(
+            "stlib_db_{}_{}.db",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let conn = open_db(&path).unwrap();
+        TempDb { conn, path }
+    }
+
+    fn model(conn: &Connection, name: &str) -> i64 {
+        upsert_model(
+            conn,
+            &format!("/models/{}.stl", name),
+            name,
+            1024,
+            &format!("{:x>64}", name),
+            42,
+            [10.0, 20.0, 30.0],
+            1000,
+        )
+        .unwrap()
+        .0
+    }
+
+    fn names(conn: &Connection, q: &LibraryQuery) -> Vec<String> {
+        let mut out: Vec<String> = list_models(conn, q).unwrap().into_iter().map(|m| m.name).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn collections_are_created_listed_and_counted() {
+        let conn = db();
+        let dragons = create_collection(&conn, "Dragons").unwrap();
+        create_collection(&conn, "Terrain").unwrap();
+
+        // An empty collection still appears -- you make one before you fill it.
+        let listed = list_collections(&conn).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "Dragons");
+        assert_eq!(listed[0].count, 0);
+
+        let a = model(&conn, "smaug");
+        let b = model(&conn, "wyvern");
+        assert_eq!(add_to_collection(&conn, dragons.id, &[a, b]).unwrap(), 2);
+
+        let listed = list_collections(&conn).unwrap();
+        assert_eq!(listed[0].count, 2);
+        assert_eq!(listed[1].count, 0);
+    }
+
+    #[test]
+    fn adding_the_same_model_twice_does_not_duplicate_it() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+
+        assert_eq!(add_to_collection(&conn, c.id, &[a]).unwrap(), 1);
+        // Second add reports nothing changed rather than creating a second row.
+        assert_eq!(add_to_collection(&conn, c.id, &[a]).unwrap(), 0);
+        assert_eq!(list_collections(&conn).unwrap()[0].count, 1);
+    }
+
+    #[test]
+    fn duplicate_names_are_refused_regardless_of_case() {
+        let conn = db();
+        create_collection(&conn, "Dragons").unwrap();
+        // COLLATE NOCASE: "dragons" and "Dragons" are the same collection, and
+        // silently making two would be worse than refusing.
+        let err = create_collection(&conn, "dragons").unwrap_err();
+        assert!(err.contains("already exists"), "got: {}", err);
+        assert!(create_collection(&conn, "  ").is_err());
+        assert_eq!(list_collections(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn filtering_by_collection_narrows_the_library() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        model(&conn, "bracket");
+        add_to_collection(&conn, c.id, &[a]).unwrap();
+
+        assert_eq!(names(&conn, &LibraryQuery::default()).len(), 2);
+        assert_eq!(
+            names(
+                &conn,
+                &LibraryQuery {
+                    collection: Some(c.id),
+                    ..Default::default()
+                }
+            ),
+            vec!["smaug"]
+        );
+    }
+
+    #[test]
+    fn collection_and_tag_and_search_combine_rather_than_replace() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let smaug = model(&conn, "smaug");
+        let wyvern = model(&conn, "wyvern");
+        add_to_collection(&conn, c.id, &[smaug, wyvern]).unwrap();
+        tag_model(&conn, smaug, "painted").unwrap();
+
+        // Searching inside a collection must not fall back to the whole library.
+        assert_eq!(
+            names(
+                &conn,
+                &LibraryQuery {
+                    collection: Some(c.id),
+                    tags: vec!["painted".into()],
+                    ..Default::default()
+                }
+            ),
+            vec!["smaug"]
+        );
+        assert_eq!(
+            names(
+                &conn,
+                &LibraryQuery {
+                    collection: Some(c.id),
+                    search: Some("wyv".into()),
+                    ..Default::default()
+                }
+            ),
+            vec!["wyvern"]
+        );
+    }
+
+    #[test]
+    fn membership_is_reported_on_the_model() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        add_to_collection(&conn, c.id, &[a]).unwrap();
+
+        let found = get_model(&conn, a).unwrap().unwrap();
+        assert_eq!(found.collections, vec!["Dragons"]);
+        let listed = list_models(&conn, &LibraryQuery::default()).unwrap();
+        assert_eq!(listed[0].collections, vec!["Dragons"]);
+    }
+
+    #[test]
+    fn removing_from_a_collection_leaves_the_model_alone() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        add_to_collection(&conn, c.id, &[a]).unwrap();
+
+        assert_eq!(remove_from_collection(&conn, c.id, &[a]).unwrap(), 1);
+        assert_eq!(list_collections(&conn).unwrap()[0].count, 0);
+        // The model itself survives.
+        assert!(get_model(&conn, a).unwrap().is_some());
+    }
+
+    #[test]
+    fn deleting_a_collection_does_not_delete_its_models() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        add_to_collection(&conn, c.id, &[a]).unwrap();
+
+        delete_collection(&conn, c.id).unwrap();
+        assert!(list_collections(&conn).unwrap().is_empty());
+        assert!(get_model(&conn, a).unwrap().is_some());
+        assert_eq!(get_model(&conn, a).unwrap().unwrap().collections.len(), 0);
+    }
+
+    /// The reason delete_model touches collection_models: otherwise every
+    /// collection that held the model reports a count that can never be right.
+    #[test]
+    fn deleting_a_model_removes_it_from_collections() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        let b = model(&conn, "wyvern");
+        add_to_collection(&conn, c.id, &[a, b]).unwrap();
+
+        delete_model(&conn, a).unwrap();
+        assert_eq!(list_collections(&conn).unwrap()[0].count, 1);
+    }
+
+    #[test]
+    fn renaming_a_collection_keeps_its_members() {
+        let conn = db();
+        let c = create_collection(&conn, "Dragons").unwrap();
+        let a = model(&conn, "smaug");
+        add_to_collection(&conn, c.id, &[a]).unwrap();
+
+        rename_collection(&conn, c.id, "Big Lizards").unwrap();
+        let listed = list_collections(&conn).unwrap();
+        assert_eq!(listed[0].name, "Big Lizards");
+        assert_eq!(listed[0].count, 1);
+        assert_eq!(get_model(&conn, a).unwrap().unwrap().collections, vec!["Big Lizards"]);
+    }
+
+    // ------------------------------------------------------------ bulk ----
+
+    #[test]
+    fn one_tag_lands_on_every_selected_model() {
+        let conn = db();
+        let ids: Vec<i64> = ["a", "b", "c"].iter().map(|n| model(&conn, n)).collect();
+
+        assert_eq!(add_tag_to_models(&conn, &ids, "minis").unwrap(), 3);
+        assert_eq!(
+            names(
+                &conn,
+                &LibraryQuery {
+                    tags: vec!["minis".into()],
+                    ..Default::default()
+                }
+            ),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn bulk_tagging_does_not_disturb_tags_already_there() {
+        let conn = db();
+        let a = model(&conn, "a");
+        let b = model(&conn, "b");
+        tag_model(&conn, a, "painted").unwrap();
+
+        add_tag_to_models(&conn, &[a, b], "minis").unwrap();
+        let mut tags = get_model(&conn, a).unwrap().unwrap().tags;
+        tags.sort();
+        // set_tags replaces; bulk add must not.
+        assert_eq!(tags, vec!["minis", "painted"]);
+    }
+
+    #[test]
+    fn re_applying_a_tag_reports_nothing_changed() {
+        let conn = db();
+        let ids: Vec<i64> = ["a", "b"].iter().map(|n| model(&conn, n)).collect();
+        assert_eq!(add_tag_to_models(&conn, &ids, "minis").unwrap(), 2);
+        assert_eq!(add_tag_to_models(&conn, &ids, "minis").unwrap(), 0);
+    }
+
+    #[test]
+    fn bulk_remove_takes_the_tag_off_only_the_selection() {
+        let conn = db();
+        let a = model(&conn, "a");
+        let b = model(&conn, "b");
+        add_tag_to_models(&conn, &[a, b], "minis").unwrap();
+
+        assert_eq!(remove_tag_from_models(&conn, &[a], "minis").unwrap(), 1);
+        assert!(get_model(&conn, a).unwrap().unwrap().tags.is_empty());
+        assert_eq!(get_model(&conn, b).unwrap().unwrap().tags, vec!["minis"]);
+    }
+
+    #[test]
+    fn bulk_operations_on_nothing_are_harmless() {
+        let conn = db();
+        let a = model(&conn, "a");
+        assert_eq!(add_tag_to_models(&conn, &[], "minis").unwrap(), 0);
+        assert_eq!(add_tag_to_models(&conn, &[a], "   ").unwrap(), 0);
+        assert_eq!(remove_tag_from_models(&conn, &[a], "never-existed").unwrap(), 0);
+        assert_eq!(add_to_collection(&conn, 999, &[]).unwrap(), 0);
+    }
 }
