@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Local-first 3D model library that scales to a multi-user NAS"
 authors = ["Dan Mattox"]
 edition = "2021"
+# Two [[bin]] targets make a bare `cargo run` ambiguous, and `tauri dev`
+# shells out to exactly that. The desktop app is the one you mean.
+default-run = "stlibrarian"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -60,7 +63,12 @@ base64 = "0.22"
 # --- desktop only ---
 tauri = { version = "2", features = [], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
+# Pinned to the same minor as the npm @tauri-apps/plugin-dialog package.
+# The Tauri CLI refuses to start if a plugin's JS package and Rust crate
+# disagree on major/minor, and a bare "2" on both sides let them resolve to
+# 2.7 and 2.6 respectively -- which broke `tauri dev` with a version
+# mismatch. Bump these two together or not at all.
+tauri-plugin-dialog = { version = "2.6", optional = true }
 
 # --- server only ---
 axum = { version = "0.8", optional = true }

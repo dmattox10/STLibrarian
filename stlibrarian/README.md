@@ -17,6 +17,12 @@ yarn install
 yarn tauri dev            # desktop app
 ```
 
+Two things that will bite if you change them. The npm `@tauri-apps/plugin-*`
+packages and their Rust crates are pinned to the same minor on purpose -- the
+Tauri CLI refuses to start if they disagree, so bump both together or neither.
+And `default-run` in `Cargo.toml` is what lets `tauri dev` work at all, because
+`tauri dev` shells out to a bare `cargo run` and this package has two binaries.
+
 ```bash
 yarn build                                       # build the web front end
 cd src-tauri
