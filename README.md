@@ -204,13 +204,30 @@ to download, which a download button on a website cannot supply. So the source
 stays here and only the built artifacts cross over to a **separate public
 repository** that holds releases and nothing else.
 
-Set up once:
+`tools/setup-releases.sh` checks every piece and tells you what is missing.
+Run it any time; it changes nothing unless you ask it to.
 
-1. Create a public repo, `dmattox10/stlibrarian-releases` (the `RELEASES_REPO`
-   value in the workflow). No source goes in it.
-2. Add a secret `RELEASES_TOKEN` here: a fine-grained personal access token
-   scoped to *that repository only*, Contents: read and write. It cannot read
-   this repository.
+The public repository, `dmattox10/stlibrarian-releases`, already exists and
+holds builds only. What remains is a token, because GitHub has no API that
+mints one: make a **fine-grained** token at
+<https://github.com/settings/personal-access-tokens/new>, scoped to *that
+repository only* with **Contents: read and write**, then
+
+```bash
+gh secret set RELEASES_TOKEN --repo dmattox10/STLibrarian
+```
+
+and paste it. Scoped that way it cannot read this repository, which is the
+point of using one rather than a token that reaches everything you own.
+
+To check the token really works before trusting it to a midnight release:
+
+```bash
+RELEASES_TOKEN=github_pat_... tools/setup-releases.sh
+```
+
+That cuts a throwaway draft release in the public repo and deletes it again. A
+draft is visible to nobody and notifies nobody.
 
 Then a release is a tag:
 
@@ -218,6 +235,11 @@ Then a release is a tag:
 # bump the version in package.json, src-tauri/Cargo.toml and tauri.conf.json
 git tag v0.2.0 && git push origin v0.2.0
 ```
+
+One caveat while this work is on a branch: `workflow_dispatch` only registers
+a workflow that exists on the default branch, so the manual run is unavailable
+until it lands on `main`. Tag-triggered runs use the workflow as it exists at
+the tagged commit, so tagging a branch works today.
 
 `.github/workflows/release.yml` runs the test suites on every platform, builds
 the desktop bundles for macOS (both architectures), Windows and Linux, builds
