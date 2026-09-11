@@ -226,12 +226,24 @@ async fn model_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
         .await
         .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
 
+    // The length must come from the file we are about to send, not from
+    // `record.size`, which is whatever the last scan saw. Those disagree the
+    // moment someone re-exports or repairs a mesh without rescanning, and the
+    // client believes the header: a grown file arrives silently truncated
+    // under a 200 -- a corrupt STL handed straight to a slicer -- and a shrunk
+    // one leaves the transfer hanging on bytes that will never come.
+    let size = file
+        .metadata()
+        .await
+        .map(|m| m.len())
+        .unwrap_or(record.size as u64);
+
     // Streamed, not read into memory: these run to hundreds of megabytes.
     let body = Body::from_stream(ReaderStream::new(file));
     Ok((
         [
             (header::CONTENT_TYPE, "model/stl".to_string()),
-            (header::CONTENT_LENGTH, record.size.to_string()),
+            (header::CONTENT_LENGTH, size.to_string()),
         ],
         body,
     )

@@ -1,0 +1,9 @@
+# Build outputs and dependencies are produced inside the image. Copying them in
+# is slower and, for target/, wrong: a host-built artefact for a different libc
+# would be picked up by the cargo cache mount.
+node_modules
+dist
+src-tauri/target
+.git
+.claude
+*.log

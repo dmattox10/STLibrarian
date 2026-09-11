@@ -32,6 +32,19 @@ cargo run --no-default-features --features server --bin stlibrarian-server
 The server prints a generated admin password to its console on first run. It is
 shown once and never stored in plaintext, so save it then.
 
+That is the from-source route. Nobody installing this on a NAS should need a
+Rust toolchain to do it, so there is also a container:
+
+```bash
+$EDITOR docker-compose.yml     # point the two volumes at your own share
+docker compose up -d
+docker compose logs stlibrarian     # the admin password, printed once
+```
+
+[docs/server-install.md](docs/server-install.md) covers all three routes --
+Docker, a prebuilt binary with a systemd unit, and from source -- along with
+permissions on a NAS share, reverse proxy settings, and backups.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `STLIBRARIAN_DATA_DIR` | platform data dir | Where `stl.db` and previews live |
@@ -165,11 +178,18 @@ the old one, so its triangle count and volume describe what is actually there.
 cd src-tauri && cargo test --lib                         # everything: 143 tests
 cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
 tools/e2e.sh                                             # server + API: 179 checks
+tools/remote-client.sh                                   # over a network: 29 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
 scratch data directory, and exercises the API the way a client does. It touches
 nothing you own.
+
+`tools/remote-client.sh` covers what a loopback test cannot. Its client runs in
+a container, on its own network namespace, and reaches the server only by IP --
+so the bind address, CORS preflight, bearer tokens on the wire, and whether a
+twenty megabyte model arrives byte-for-byte are all actually exercised rather
+than assumed. Needs Docker.
 
 ## How it is put together
 

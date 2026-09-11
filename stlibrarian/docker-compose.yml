@@ -1,0 +1,50 @@
+# STLibrarian Pro on a NAS.
+#
+#   1. Edit the two paths under `volumes` to point at your own share.
+#   2. docker compose up -d
+#   3. docker compose logs stlibrarian   <- the admin password, printed once
+#   4. http://your-nas:3000
+#
+# That is the whole install. Nothing is needed on the NAS but Docker.
+services:
+  stlibrarian:
+    # Build locally, or replace with `image: ghcr.io/dmattox10/stlibrarian:latest`
+    # once a release has been published.
+    build: .
+    image: stlibrarian:latest
+    container_name: stlibrarian
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      # Your models. Read-write because Organise moves files on disk -- that is
+      # the server's one job the desktop app will not do. Make it :ro if you
+      # never intend to use it, and Organise will fail loudly rather than
+      # silently doing nothing.
+      - /volume1/3dprints:/library
+
+      # The library itself: stl.db plus rendered thumbnails. This is the part
+      # to back up, and the part you lose if you skip this line.
+      - ./data:/data
+
+    environment:
+      # Both already set in the image; repeated here because they are the two
+      # someone will want to change, and a value you cannot see is a value you
+      # cannot change.
+      STLIBRARIAN_DATA_DIR: /data
+      STLIBRARIAN_BIND: 0.0.0.0:3000
+      RUST_LOG: info
+
+    # Uncomment and set to the owner of your share once you know it. Left off
+    # by default: running as the wrong user turns a working install into an
+    # empty library with a permissions error buried in the log.
+    # user: "1000:1000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
