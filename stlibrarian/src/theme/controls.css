@@ -1386,3 +1386,43 @@
 .gc-chip {
   min-width: 0;
 }
+
+/* --------------------------------------------------------- backup --- */
+
+.backup {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(76, 86, 106, 0.4);
+}
+
+.backup:first-of-type {
+  border-top: 0;
+}
+
+.backup__label {
+  grid-column: 1 / -1;
+  font-family: var(--font-num);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.backup__path {
+  font-size: 10.5px;
+  color: var(--ink-bright);
+  /* A path is long and the rail is narrow; keep the filename end visible. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.backup__size {
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}

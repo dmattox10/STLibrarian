@@ -2533,3 +2533,77 @@ pub fn find_missing_slices(conn: &Connection) -> Result<Vec<(i64, String)>> {
         .filter(|(_, p)| !Path::new(p).exists())
         .collect())
 }
+
+/// Models whose file is no longer where the library left it.
+pub fn missing_models(conn: &Connection) -> Result<Vec<ModelRecord>> {
+    let mut out = Vec::new();
+    for (id, _) in find_missing(conn)? {
+        if let Some(m) = get_model(conn, id)? {
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+/// Point a model at a different file and re-measure it from scratch.
+///
+/// Everything derived from the bytes is recomputed rather than carried over,
+/// because the new file may not be the old one: a re-export, a repaired mesh,
+/// a different resolution of the same sculpt. Keeping the old triangle count
+/// against a new file would be worse than having no number at all.
+pub fn remeasure_model(conn: &Connection, model_id: i64, new_path: &str) -> std::result::Result<(), String> {
+    let file = Path::new(new_path);
+    if !file.is_file() {
+        return Err("There is no file at that path".into());
+    }
+    // Paths are unique, so a file already in the library cannot be claimed by
+    // a second row. Without this the UPDATE fails on a constraint and the
+    // person is told nothing useful about why.
+    let taken: Option<String> = conn
+        .query_row(
+            "SELECT name FROM models WHERE path = ?1 AND id <> ?2",
+            params![new_path, model_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(other) = taken {
+        return Err(format!("\"{}\" already points at that file", other));
+    }
+
+    let meta = std::fs::metadata(file).map_err(|e| e.to_string())?;
+    let hash = crate::core::scanner::hash_file(file).map_err(|e| e.to_string())?;
+    let geometry = crate::core::stl::read_meta(file).unwrap_or_else(|_| crate::core::stl::StlMeta::empty());
+    let dims = geometry.dimensions();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let dir = file
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent_dir = Path::new(&dir)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    conn.execute(
+        "UPDATE models SET path=?2, dir=?3, parent_dir=?4, size=?5, hash=?6, triangles=?7,
+                dim_x=?8, dim_y=?9, dim_z=?10, volume=?11, watertight=?12, mtime=?13
+         WHERE id=?1",
+        params![
+            model_id, new_path, dir, parent_dir, meta.len() as i64, hash,
+            i64::from(geometry.triangles), f64::from(dims[0]), f64::from(dims[1]),
+            f64::from(dims[2]), f64::from(geometry.volume), geometry.watertight, mtime
+        ],
+    )
+    .map_err(|e| format!("Could not update the model: {}", e))?;
+
+    // The preview is keyed by content hash, so a different file means a
+    // different key -- but the old picture would linger under the old one.
+    crate::core::thumbs::forget(&hash);
+    Ok(())
+}

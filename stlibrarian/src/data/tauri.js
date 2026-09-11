@@ -84,7 +84,13 @@ export function createTauriAdapter() {
     logPrint: (modelId, entry) => invoke("log_print", { modelId, entry }),
     deletePrint: (printId) => invoke("delete_print", { printId }),
     bulkRemoveTag: (modelIds, tag) => invoke("bulk_remove_tag", { modelIds, tag }),
-    missingFiles: () => invoke("missing_files"),
+    libraryLocation: () => invoke("library_location"),
+    revealDataDir: () => invoke("reveal_data_dir"),
+    missingModels: () => invoke("missing_models"),
+    relinkPlan: (root) => invoke("relink_plan", { root }),
+    relinkApply: (root) => invoke("relink_apply", { root }),
+    repointModel: (modelId, path) => invoke("repoint_model", { modelId, path }),
+    pickFile: () => invoke("pick_file"),
 
     // Returns a data: URL, which drops straight into an <img src>.
     getThumbUrl: (hash) => invoke("get_thumb", { hash }),

@@ -259,3 +259,18 @@ pub struct Slice {
     pub model_id: Option<i64>,
     pub package_id: Option<i64>,
 }
+
+/// Where the library keeps itself, so it can be backed up.
+///
+/// Only `db` matters: previews are derived from the models and rebuild
+/// themselves, so a backup that skips them loses nothing but time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryLocation {
+    pub data_dir: String,
+    pub db_path: String,
+    pub thumbs_dir: String,
+    pub db_bytes: i64,
+    pub thumbs_bytes: i64,
+    /// True when STLIBRARIAN_DATA_DIR is pointing this somewhere chosen.
+    pub overridden: bool,
+}

@@ -20,10 +20,10 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
-    PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount, User,
+    LibraryLocation, PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount, User,
 };
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
-use stlibrarian_lib::core::{auth, db, organize, paths, scanner, stl, thumbs};
+use stlibrarian_lib::core::{auth, db, organize, paths, relink, scanner, stl, thumbs};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -588,6 +588,69 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
         .map(|changed| Json(Changed { changed }))
 }
 
+// -------------------------------------------------------- lost and found ----
+
+#[derive(Deserialize)]
+struct RootReq {
+    root: String,
+}
+
+#[derive(Deserialize)]
+struct RepointReq {
+    path: String,
+}
+
+/// Where the library keeps itself. Admin only: it is a path on the server.
+async fn location_route(
+    Extension(user): Extension<User>,
+) -> Result<Json<LibraryLocation>, ApiError> {
+    require_admin(&user)?;
+    Ok(Json(paths::location()))
+}
+
+async fn missing_route() -> Result<Json<Vec<ModelRecord>>, ApiError> {
+    with_db(|conn| db::missing_models(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+/// What relinking would reconnect. Reads only.
+async fn relink_plan_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<RootReq>,
+) -> Result<Json<Vec<relink::RelinkMatch>>, ApiError> {
+    require_admin(&user)?;
+    with_db(move |conn| relink::plan(conn, std::path::Path::new(&req.root)))
+        .await
+        .map(Json)
+}
+
+async fn relink_apply_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<RootReq>,
+) -> Result<Json<relink::RelinkReport>, ApiError> {
+    require_admin(&user)?;
+    with_db(move |conn| relink::apply(conn, std::path::Path::new(&req.root)))
+        .await
+        .map(Json)
+}
+
+/// Point one model at one file, by hand.
+async fn repoint_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+    Json(req): Json<RepointReq>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&user)?;
+    let done = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        relink::repoint(&conn, id, &req.path)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
 // -------------------------------------------------------------- organise ----
 
 #[derive(Deserialize)]
@@ -911,6 +974,11 @@ async fn main() {
         .route("/packages/{id}", delete(delete_package_route))
         .route("/packages/{id}/models", post(assign_package_route))
         .route("/duplicates", get(duplicates_route))
+        .route("/library/location", get(location_route))
+        .route("/library/missing", get(missing_route))
+        .route("/library/relink/plan", post(relink_plan_route))
+        .route("/library/relink/apply", post(relink_apply_route))
+        .route("/models/{id}/repoint", post(repoint_route))
         .route("/organize/plan", post(organize_plan_route))
         .route("/organize/apply", post(organize_apply_route))
         .route("/models/{id}/slices", get(slices_route))

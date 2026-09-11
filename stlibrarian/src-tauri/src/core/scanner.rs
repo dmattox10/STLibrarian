@@ -279,7 +279,7 @@ fn provenance<'a>(path: &'a Path, root: &'a Path) -> (String, String) {
 /// The previous implementation called `fs::read`, pulling the entire file into
 /// memory. Multi-hundred-megabyte STLs are routine, and a library scan would
 /// hold one of them at a time for no reason.
-fn hash_file(path: &Path) -> std::io::Result<String> {
+pub(crate) fn hash_file(path: &Path) -> std::io::Result<String> {
     let mut reader = BufReader::with_capacity(64 * 1024, File::open(path)?);
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];

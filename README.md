@@ -116,12 +116,55 @@ notes. Failures count too -- how many attempts a model took is the interesting
 part. The grid marks what you have printed, and the top bar filters to what you
 never have, which is the question a pile of downloads cannot answer.
 
+## Where your library lives
+
+Everything you tell STLibrarian -- tags, packages, collections, print history,
+provenance you corrected by hand -- is in one SQLite file. Your models stay
+wherever you keep them and are never copied into it.
+
+| | |
+| --- | --- |
+| macOS | `~/Library/Application Support/STLibrarian/` |
+| Linux | `~/.local/share/STLibrarian/` |
+| Windows | `%APPDATA%\STLibrarian\` |
+| Anywhere | `STLIBRARIAN_DATA_DIR` overrides all of the above |
+
+That folder holds `stl.db` and a `thumbnails/` directory. **Back up `stl.db`
+and you have kept all of it.** Previews are drawn from the models and rebuild
+themselves, so a backup that skips them loses nothing but time.
+
+Close the app first, or copy `stl.db-wal` and `stl.db-shm` alongside it --
+those hold writes that have not been folded into the main file yet, and a copy
+without them can be a moment stale.
+
+The app shows you this path, with a button to reveal it, under **Backup** in
+the sidebar.
+
+## When files move
+
+Every row stores an absolute path, which is fine until it is not: a library
+moved to a bigger disk, a share remounted somewhere else, or a database
+restored onto a machine that keeps its models somewhere different. Then every
+path is wrong at once and the library looks empty even though nothing is lost.
+
+Nothing is ever deleted for being missing -- an unplugged drive must not empty
+somebody's library. Instead **Missing files** appears in the sidebar. Point it
+at where the models are now and it matches them **by content**, so renames and
+reorganised folders make no difference. Only files whose size already matches
+something missing are opened, so it does not re-read the whole library to find
+a few strays.
+
+For what searching cannot reach -- a model re-exported at a different
+resolution, a mesh someone repaired -- **Locate** points one model at one file
+by hand. The row is then re-measured from that file rather than assuming it is
+the old one, so its triangle count and volume describe what is actually there.
+
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --lib                         # everything: 133 tests
+cd src-tauri && cargo test --lib                         # everything: 143 tests
 cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
-tools/e2e.sh                                             # server + API: 159 checks
+tools/e2e.sh                                             # server + API: 179 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a

@@ -198,9 +198,16 @@ export function createHttpAdapter(baseUrl = "") {
     deletePrint: (printId) => request(`/api/prints/${printId}`, { method: "DELETE" }),
     bulkRemoveTag: (modelIds, tag) =>
       request("/api/bulk/tags/remove", { method: "POST", body: { model_ids: modelIds, tag } }),
-    async missingFiles() {
-      return [];
-    },
+    libraryLocation: () => request("/api/library/location"),
+    missingModels: () => request("/api/library/missing"),
+    relinkPlan: (root) => request("/api/library/relink/plan", { method: "POST", body: { root } }),
+    relinkApply: (root) => request("/api/library/relink/apply", { method: "POST", body: { root } }),
+    repointModel: (modelId, path) =>
+      request(`/api/models/${modelId}/repoint`, { method: "POST", body: { path } }),
+    // A browser cannot open a file picker onto the server's disk, so a manual
+    // fix there is a typed path.
+    revealDataDir: null,
+    pickFile: null,
 
     // The server sets a long immutable cache header, and the URL is keyed by
     // content hash, so the browser only ever fetches each preview once.

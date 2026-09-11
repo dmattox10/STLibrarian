@@ -504,6 +504,50 @@ check "  and reads back"            "$(api "$BASE/api/models/$PALADIN/prints" | 
 check "detaching leaves the file"   "$(post_code "$BASE/api/slices/$ORPHAN/owner" '{}')" 204
 check "  back to unattached"        "$(api "$BASE/api/slices/unattached" | jlen)" 1
 
+echo "== backup location =="
+LOC="$(api "$BASE/api/library/location")"
+check "reports its database"     "$(printf '%s' "$LOC" | python3 -c 'import sys,json,os;print(os.path.basename(json.load(sys.stdin)["db_path"]))')" "stl.db"
+check "  which exists on disk"   "$(printf '%s' "$LOC" | python3 -c 'import sys,json,os;print(os.path.isfile(json.load(sys.stdin)["db_path"]))')" "True"
+check "  and has a size"         "$(printf '%s' "$LOC" | python3 -c 'import sys,json;print("yes" if json.load(sys.stdin)["db_bytes"]>0 else "no")')" "yes"
+check "  notes the override"     "$(printf '%s' "$LOC" | jfield overridden)" "True"
+
+echo "== finding files that moved =="
+# Take one model's file out from under the library.
+STRAY_ID="$(api "$BASE/api/models?search=tetra" | jfirst id)"
+STRAY_PATH="$(api "$BASE/api/models?search=tetra" | jfirst path)"
+mkdir -p "$WORK/moved-away"
+mv "$STRAY_PATH" "$WORK/moved-away/renamed-entirely.obj"
+
+check "the library notices"      "$(api "$BASE/api/stats" | jfield missing)" 1
+check "  and lists it"           "$(api "$BASE/api/library/missing" | jlen)" 1
+
+LOOK="$(printf '{"root":"%s"}' "$WORK/moved-away")"
+check "search finds it by content" "$(post "$BASE/api/library/relink/plan" "$LOOK" | jlen)" 1
+check "  despite the new name"   "$(post "$BASE/api/library/relink/plan" "$LOOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["found"].endswith("renamed-entirely.obj"))')" "True"
+check "  and planning changed nothing" "$(api "$BASE/api/stats" | jfield missing)" 1
+
+RELINK="$(post "$BASE/api/library/relink/apply" "$LOOK")"
+check "reconnecting works"       "$(printf '%s' "$RELINK" | jfield relinked)" 1
+check "  nothing still missing"  "$(printf '%s' "$RELINK" | jfield still_missing)" 0
+check "  the row followed it"    "$(api "$BASE/api/models/$STRAY_ID" | python3 -c 'import sys,json;print(json.load(sys.stdin)["path"].endswith("renamed-entirely.obj"))')" "True"
+check "  and it still previews"  "$(api_code "$BASE/api/thumb/$(api "$BASE/api/models/$STRAY_ID" | jfield hash)")" 200
+
+# A file search cannot match: gone for good, replaced by hand.
+rm "$WORK/moved-away/renamed-entirely.obj"
+check "a deleted file is missing" "$(api "$BASE/api/stats" | jfield missing)" 1
+check "  and stays in the library" "$(api_code "$BASE/api/models/$STRAY_ID")" 200
+# A replacement the library has never seen -- a re-export, say. Pointing at a
+# file another model already uses is a different case, checked below.
+mkdir -p "$WORK/replacements"
+cp "$WORK/models/cube.stl" "$WORK/replacements/tetra-reexported.stl"
+REPOINT="$(printf '{"path":"%s"}' "$WORK/replacements/tetra-reexported.stl")"
+check "pointing it at a replacement" "$(post_code "$BASE/api/models/$STRAY_ID/repoint" "$REPOINT")" 204
+check "  nothing missing now"    "$(api "$BASE/api/stats" | jfield missing)" 0
+check "  and it was re-measured" "$(api "$BASE/api/models/$STRAY_ID" | jfield triangles)" 12
+check "pointing at nothing is refused" "$(post_code "$BASE/api/models/$STRAY_ID/repoint" '{"path":"/no/such/file.stl"}')" 400
+TAKEN="$(printf '{"path":"%s"}' "$WORK/models/cube.stl")"
+check "  as is a file already in use" "$(post_code "$BASE/api/models/$STRAY_ID/repoint" "$TAKEN")" 400
+
 echo "== organising files on disk (Pro) =="
 # Deliberately last: this is the only thing that moves the fixtures, so every
 # assertion above still describes where the files started.

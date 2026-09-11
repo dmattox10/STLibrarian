@@ -3,6 +3,7 @@ pub mod db;
 pub mod models;
 pub mod organize;
 pub mod paths;
+pub mod relink;
 pub mod raster;
 pub mod scanner;
 pub mod sliced;

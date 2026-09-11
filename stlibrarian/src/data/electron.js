@@ -29,7 +29,8 @@
  *     pickFolder() -> string | null,
  *     onScanProgress(cb) -> unsubscribe,
  *     onFileDrop(cb) -> unsubscribe,   // cb({state:"over"|"drop"|"leave", paths})
- *     pruneThumbs(), missingFiles(),
+ *     pruneThumbs(), libraryLocation(), missingModels(),
+ *     relinkPlan(root), relinkApply(root), repointModel(modelId, path),
  *   }
  *
  * Everything above `src/data/` is untouched by which shell is running, so
@@ -61,7 +62,13 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     setTags: (modelId, tags) => bridge.setTags(modelId, tags),
     deleteModel: (modelId) => bridge.deleteModel(modelId),
     pruneThumbs: () => bridge.pruneThumbs?.() ?? 0,
-    missingFiles: () => bridge.missingFiles?.() ?? [],
+    libraryLocation: () => bridge.libraryLocation(),
+    revealDataDir: bridge.revealDataDir ? () => bridge.revealDataDir() : null,
+    missingModels: () => bridge.missingModels(),
+    relinkPlan: (root) => bridge.relinkPlan(root),
+    relinkApply: (root) => bridge.relinkApply(root),
+    repointModel: (modelId, path) => bridge.repointModel(modelId, path),
+    pickFile: bridge.pickFile ? () => bridge.pickFile() : null,
 
     collections: () => bridge.collections(),
     createCollection: (name) => bridge.createCollection(name),

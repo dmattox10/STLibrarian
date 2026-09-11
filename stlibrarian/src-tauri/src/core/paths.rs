@@ -37,3 +37,39 @@ pub fn ensure_dirs() -> std::io::Result<()> {
     std::fs::create_dir_all(thumb_dir())?;
     Ok(())
 }
+
+fn size_of(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0)
+}
+
+/// Everything needed to answer "what do I back up?"
+pub fn location() -> crate::core::models::LibraryLocation {
+    let db = db_path();
+    // WAL and shared-memory sidecars hold writes that have not been folded
+    // into the main file yet; a backup without them can be a moment stale.
+    let db_bytes = size_of(&db)
+        + size_of(&db.with_extension("db-wal"))
+        + size_of(&db.with_extension("db-shm"));
+
+    let thumbs = thumb_dir();
+    let thumbs_bytes = std::fs::read_dir(&thumbs)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len() as i64)
+                .sum()
+        })
+        .unwrap_or(0);
+
+    crate::core::models::LibraryLocation {
+        data_dir: data_dir().to_string_lossy().to_string(),
+        db_path: db.to_string_lossy().to_string(),
+        thumbs_dir: thumbs.to_string_lossy().to_string(),
+        db_bytes,
+        thumbs_bytes,
+        overridden: std::env::var("STLIBRARIAN_DATA_DIR")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false),
+    }
+}

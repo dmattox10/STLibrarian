@@ -1,7 +1,7 @@
 use crate::core::db;
 use crate::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
-    PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount,
+    LibraryLocation, PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount,
 };
 use crate::core::paths;
 use crate::core::scanner;
@@ -147,6 +147,69 @@ fn assign_to_package(package_id: i64, model_ids: Vec<i64>) -> Result<usize, Stri
 fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
     let c = conn()?;
     db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
+}
+
+// -------------------------------------------------------- lost and found ----
+
+/// Where the library lives, so it can be backed up.
+#[command]
+fn library_location() -> LibraryLocation {
+    paths::location()
+}
+
+#[command]
+fn reveal_data_dir(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(paths::data_dir().to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| format!("Could not open it: {}", e))
+}
+
+#[command]
+fn missing_models() -> Result<Vec<ModelRecord>, String> {
+    let c = conn()?;
+    db::missing_models(&c).map_err(|e| e.to_string())
+}
+
+#[command]
+async fn relink_plan(root: String) -> Result<Vec<crate::core::relink::RelinkMatch>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = conn()?;
+        crate::core::relink::plan(&c, std::path::Path::new(&root))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[command]
+async fn relink_apply(root: String) -> Result<crate::core::relink::RelinkReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = conn()?;
+        crate::core::relink::apply(&c, std::path::Path::new(&root))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[command]
+fn repoint_model(model_id: i64, path: String) -> Result<(), String> {
+    let c = conn()?;
+    crate::core::relink::repoint(&c, model_id, &path)
+}
+
+/// A file picker for the manual fix, when searching cannot find it.
+#[command]
+async fn pick_file(app: tauri::AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Models", &["stl", "obj", "3mf", "STL", "OBJ", "3MF"])
+            .blocking_pick_file()
+            .map(|p| p.to_string())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 // ---------------------------------------------------------------- slices ----
@@ -382,19 +445,6 @@ fn prune_thumbs() -> Result<usize, String> {
     Ok(thumbs::prune(&live))
 }
 
-#[command]
-fn missing_files() -> Result<Vec<ModelRecord>, String> {
-    let c = conn()?;
-    let ids = db::find_missing(&c).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for (id, _) in ids {
-        if let Ok(Some(m)) = db::get_model(&c, id) {
-            out.push(m);
-        }
-    }
-    Ok(out)
-}
-
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     if let Err(e) = paths::ensure_dirs() {
@@ -449,6 +499,13 @@ pub fn run() {
             open_slice,
             open_remote,
             clear_remote_cache,
+            library_location,
+            reveal_data_dir,
+            missing_models,
+            relink_plan,
+            relink_apply,
+            repoint_model,
+            pick_file,
             set_provenance,
             creators,
             get_thumb,
@@ -457,7 +514,6 @@ pub fn run() {
             preview_mesh,
             pick_folder,
             prune_thumbs,
-            missing_files
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
