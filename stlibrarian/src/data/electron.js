@@ -90,6 +90,11 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     openInSlicer: bridge.openInSlicer ? (id) => bridge.openInSlicer(id) : null,
     revealInFolder: bridge.revealInFolder ? (id) => bridge.revealInFolder(id) : null,
 
+    // Deliberately absent on the desktop: rearranging a collection is the
+    // Pro server's job, so it is built once rather than per platform.
+    organizePlan: null,
+    organizeApply: null,
+
     prints: (modelId) => bridge.prints(modelId),
     logPrint: (modelId, entry) => bridge.logPrint(modelId, entry),
     deletePrint: (printId) => bridge.deletePrint(printId),

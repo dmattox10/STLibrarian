@@ -2015,3 +2015,24 @@ pub fn delete_prints_for_model(conn: &Connection, model_id: i64) -> Result<()> {
     conn.execute("DELETE FROM prints WHERE model_id = ?1", params![model_id])?;
     Ok(())
 }
+
+/// Point a model row at a file that has moved.
+///
+/// Only the organiser calls this, and only after the move succeeded. The
+/// denormalised directories have to move with it or image matching and package
+/// suggestions would keep describing where the file used to be.
+pub fn relocate_model(conn: &Connection, model_id: i64, new_path: &str) -> Result<()> {
+    let dir = Path::new(new_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent_dir = Path::new(&dir)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    conn.execute(
+        "UPDATE models SET path = ?2, dir = ?3, parent_dir = ?4 WHERE id = ?1",
+        params![model_id, new_path, dir, parent_dir],
+    )?;
+    Ok(())
+}

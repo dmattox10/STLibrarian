@@ -22,7 +22,8 @@ use stlibrarian_lib::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
     PackageSuggestion, PrintRecord, ScanReport, TagCount, User,
 };
-use stlibrarian_lib::core::{auth, db, paths, scanner, stl, thumbs};
+use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
+use stlibrarian_lib::core::{auth, db, organize, paths, scanner, stl, thumbs};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -473,6 +474,37 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
         .map(|changed| Json(Changed { changed }))
 }
 
+// -------------------------------------------------------------- organise ----
+
+#[derive(Deserialize)]
+struct OrganizeReq {
+    root: String,
+}
+
+/// What organising would do. Reads only, so it is safe to call at any time.
+async fn organize_plan_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<OrganizeReq>,
+) -> Result<Json<Vec<PlannedMove>>, ApiError> {
+    require_admin(&user)?;
+    with_db(move |conn| organize::plan(conn, std::path::Path::new(&req.root)))
+        .await
+        .map(Json)
+}
+
+/// Carry it out. The only endpoint in the product that writes to the library's
+/// files, which is why it is admin-only, server-only, and recomputes the plan
+/// itself rather than trusting one sent by a client.
+async fn organize_apply_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<OrganizeReq>,
+) -> Result<Json<OrganizeReport>, ApiError> {
+    require_admin(&user)?;
+    with_db(move |conn| organize::apply(conn, std::path::Path::new(&req.root)))
+        .await
+        .map(Json)
+}
+
 // ---------------------------------------------------------------- prints ----
 
 async fn prints_route(Path(id): Path<i64>) -> Result<Json<Vec<PrintRecord>>, ApiError> {
@@ -694,6 +726,8 @@ async fn main() {
         .route("/packages/{id}", delete(delete_package_route))
         .route("/packages/{id}/models", post(assign_package_route))
         .route("/duplicates", get(duplicates_route))
+        .route("/organize/plan", post(organize_plan_route))
+        .route("/organize/apply", post(organize_apply_route))
         .route("/models/{id}/prints", get(prints_route))
         .route("/models/{id}/prints", post(log_print_route))
         .route("/prints/{id}", delete(delete_print_route))

@@ -364,6 +364,42 @@ check "unsupported detected"     "$(api "$BASE/api/models?search=body" | jfirst 
 check "filter by variant"        "$(api "$BASE/api/models?variant=supported" | jlen)" 1
 check "  the two do not overlap" "$(api "$BASE/api/models?variant=unsupported" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["variant"]!="unsupported"))')" 0
 
+echo "== organising files on disk (Pro) =="
+# Deliberately last: this is the only thing that moves the fixtures, so every
+# assertion above still describes where the files started.
+ORG="$WORK/organized"
+ORG_BODY="$(printf '{"root":"%s"}' "$ORG")"
+
+PLAN="$(post "$BASE/api/organize/plan" "$ORG_BODY")"
+plan_count() { python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["action"]==sys.argv[1]))' "$1"; }
+check "plan proposes moves"      "$(printf '%s' "$PLAN" | plan_count move | python3 -c 'import sys;print("yes" if int(sys.stdin.read())>0 else "no")')" "yes"
+check "  nothing in place yet"   "$(printf '%s' "$PLAN" | plan_count inplace)" 0
+check "  no destination escapes" "$(printf '%s' "$PLAN" | python3 -c 'import sys,json,os;print(sum(1 for m in json.load(sys.stdin) if not os.path.abspath(m["to"]).startswith(os.path.abspath(sys.argv[1]))))' "$ORG")" 0
+check "  planning moved nothing" "$([ -d "$ORG" ] && echo exists || echo absent)" "absent"
+
+BEFORE="$(api "$BASE/api/models" | jlen)"
+REPORT="$(post "$BASE/api/organize/apply" "$ORG_BODY")"
+check "apply moved files"        "$(printf '%s' "$REPORT" | python3 -c 'import sys,json;print("yes" if json.load(sys.stdin)["moved"]>0 else "no")')" "yes"
+check "  nothing failed"         "$(printf '%s' "$REPORT" | jfield failed)" 0
+check "  library still complete" "$(api "$BASE/api/models" | jlen)" "$BEFORE"
+check "  files really moved"     "$([ -d "$ORG" ] && echo yes || echo no)" "yes"
+check "  rows point at the new paths" "$(api "$BASE/api/models" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if not m["path"].startswith(sys.argv[1])))' "$ORG")" 0
+check "  every file exists where the row says" "$(api "$BASE/api/models" | python3 -c 'import sys,json,os;print(sum(1 for m in json.load(sys.stdin) if not os.path.isfile(m["path"])))')" 0
+
+# Parts of one package share a folder.
+check "package parts land together" "$(api "$BASE/api/models" | python3 -c '
+import sys, json, os
+by = {}
+for m in json.load(sys.stdin):
+    if m["package_id"]:
+        by.setdefault(m["package_id"], set()).add(os.path.dirname(m["path"]))
+print(sum(1 for dirs in by.values() if len(dirs) > 1))')" 0
+
+REPLAN="$(post "$BASE/api/organize/plan" "$ORG_BODY")"
+check "re-planning finds nothing to do" "$(printf '%s' "$REPLAN" | plan_count move)" 0
+check "  everything is in place"        "$(printf '%s' "$REPLAN" | plan_count inplace | python3 -c 'import sys;print("yes" if int(sys.stdin.read())>0 else "no")')" "yes"
+check "applying again is a no-op"       "$(post "$BASE/api/organize/apply" "$ORG_BODY" | jfield moved)" 0
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"

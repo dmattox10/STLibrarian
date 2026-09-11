@@ -64,6 +64,11 @@ export function createTauriAdapter() {
     openInSlicer: (modelId) => invoke("open_in_slicer", { modelId }),
     revealInFolder: (modelId) => invoke("reveal_in_folder", { modelId }),
 
+    // Deliberately absent on the desktop: rearranging a collection is the
+    // Pro server's job, so it is built once rather than per platform.
+    organizePlan: null,
+    organizeApply: null,
+
     prints: (modelId) => invoke("prints", { modelId }),
     logPrint: (modelId, entry) => invoke("log_print", { modelId, entry }),
     deletePrint: (printId) => invoke("delete_print", { printId }),

@@ -162,6 +162,13 @@ export function createHttpAdapter(baseUrl = "") {
 
     // The files live on the server, not on whatever machine is browsing, so
     // there is nothing here for a slicer to open.
+    // Pro only: the files are on the server, so the server is the only thing
+    // that can move them -- which is also why this exists here and nowhere else.
+    organizePlan: (root) =>
+      request("/api/organize/plan", { method: "POST", body: { root } }),
+    organizeApply: (root) =>
+      request("/api/organize/apply", { method: "POST", body: { root } }),
+
     openInSlicer: null,
     revealInFolder: null,
 

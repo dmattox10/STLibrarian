@@ -1190,3 +1190,13 @@
   color: var(--nord0);
   background: var(--nord14);
 }
+
+.organiserow {
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}

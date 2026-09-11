@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod db;
 pub mod models;
+pub mod organize;
 pub mod paths;
 pub mod raster;
 pub mod scanner;

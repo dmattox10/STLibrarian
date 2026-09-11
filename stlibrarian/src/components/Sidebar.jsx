@@ -3,6 +3,7 @@ import { Alert, Button, Field, FolderIcon, Meter, Panel, TagChip } from "./contr
 import CollectionsPanel from "./CollectionsPanel.jsx";
 import PackagesPanel from "./PackagesPanel.jsx";
 import DuplicatesPanel from "./DuplicatesPanel.jsx";
+import OrganizePanel from "./OrganizePanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -179,6 +180,8 @@ export default function Sidebar({
       ) : null}
 
       <DuplicatesPanel api={api} onSelectModel={onSelectModel} reloadToken={reloadToken} />
+
+      {canScan ? <OrganizePanel api={api} onChanged={onRefresh} /> : null}
 
       <Panel title="Library">
         <dl className="gc-kv">
