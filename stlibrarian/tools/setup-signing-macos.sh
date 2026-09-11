@@ -109,20 +109,11 @@ if ! openssl pkcs12 -in "$P12" -passin "pass:$P12_PASSWORD" -nocerts -noout -leg
 fi
 ok "it carries the private key"
 
-say "Notarization"
-cat <<'TEXT'
-  Needs an app-specific password, never your Apple ID password. Make one at
-  https://appleid.apple.com -> Sign-In and Security -> App-Specific Passwords.
-
-TEXT
-printf '  Apple ID email: '
-read -r APPLE_ID
-printf '  App-specific password: '
-read -r -s APPLE_PASSWORD
-printf '\n'
-[ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] || { bad "both are required"; exit 1; }
-
-say "Uploading to $REPO"
+# The four that come from the certificate are known now. The two Apple
+# account ones are not derivable from anything on this machine, so they may
+# arrive in the environment, or be typed, or be left for a later run -- the
+# four go up either way rather than making you start over.
+say "Uploading what comes from the certificate"
 # Values go in over stdin so none of them lands in the process list.
 set_secret() { printf '%s' "$2" | gh secret set "$1" --repo "$REPO" >/dev/null; ok "$1"; }
 
@@ -130,9 +121,40 @@ base64 -i "$P12" | gh secret set APPLE_CERTIFICATE --repo "$REPO" >/dev/null
 ok "APPLE_CERTIFICATE"
 set_secret APPLE_CERTIFICATE_PASSWORD "$P12_PASSWORD"
 set_secret APPLE_SIGNING_IDENTITY "$IDENTITY"
-set_secret APPLE_ID "$APPLE_ID"
-set_secret APPLE_PASSWORD "$APPLE_PASSWORD"
 set_secret APPLE_TEAM_ID "$TEAM_ID"
+
+say "Notarization"
+if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ]; then
+  set_secret APPLE_ID "$APPLE_ID"
+  set_secret APPLE_PASSWORD "$APPLE_PASSWORD"
+elif [ -t 0 ]; then
+  cat <<'TEXT'
+  Needs an app-specific password, never your Apple ID password. Make one at
+  https://appleid.apple.com -> Sign-In and Security -> App-Specific Passwords.
+
+TEXT
+  printf '  Apple ID email: '
+  read -r APPLE_ID
+  printf '  App-specific password: '
+  read -r -s APPLE_PASSWORD
+  printf '\n'
+  if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ]; then
+    set_secret APPLE_ID "$APPLE_ID"
+    set_secret APPLE_PASSWORD "$APPLE_PASSWORD"
+  else
+    bad "skipped; builds will be signed but not notarized"
+  fi
+else
+  bad "APPLE_ID and APPLE_PASSWORD not set, and nothing to prompt"
+  cat <<TEXT
+        Signed but not notarized is still refused by Gatekeeper on download.
+        Make an app-specific password at https://appleid.apple.com, then:
+
+          gh secret set APPLE_ID --repo $REPO
+          gh secret set APPLE_PASSWORD --repo $REPO
+
+TEXT
+fi
 
 say "Where that leaves things"
 "$(dirname "$0")/setup-releases.sh" || true

@@ -36,12 +36,24 @@ else
   exit 1
 fi
 
+# Fetched once, not once per key. Asking six times in a row got throttled and
+# the failures were invisible behind 2>/dev/null, so a key that was present
+# reported missing -- a different one each run, which is the tell. A lookup
+# that cannot answer must say so rather than answer "no".
+SECRET_LIST="$(gh secret list --repo "$SOURCE_REPO" 2>/dev/null || true)"
+if [ -z "$SECRET_LIST" ]; then
+  bad "could not read the secret list for $SOURCE_REPO"
+  echo "        Nothing below about signing can be trusted; try again in a moment."
+  exit 1
+fi
+have_secret() { printf '%s\n' "$SECRET_LIST" | grep -q "^$1[[:space:]]"; }
+
 # ---------------------------------------------------------------- the token --
 #
 # A fine-grained token scoped to the releases repository only. It cannot read
 # the private source, which is the entire point of using one rather than a
 # token that reaches everything you own.
-if gh secret list --repo "$SOURCE_REPO" 2>/dev/null | grep -q "^$SECRET_NAME"; then
+if have_secret "$SECRET_NAME"; then
   ok "$SECRET_NAME is set on $SOURCE_REPO"
 else
   bad "$SECRET_NAME is not set on $SOURCE_REPO"
@@ -74,7 +86,7 @@ fi
 # warned about by SmartScreen, so a public download page wants these.
 say "Signing"
 
-have_secret() { gh secret list --repo "$SOURCE_REPO" 2>/dev/null | grep -q "^$1[[:space:]]"; }
+
 
 MAC_NEEDED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
 MAC_MISSING=""
