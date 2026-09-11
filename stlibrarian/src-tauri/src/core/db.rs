@@ -133,6 +133,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         // A creator's own render, when the folder shipped one.
         ("image_id", "INTEGER"),
         ("variant", "TEXT NOT NULL DEFAULT ''"),
+        ("watertight", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         if !has_column(conn, "models", column) {
             conn.execute_batch(&format!(
@@ -182,6 +183,7 @@ pub fn upsert_model(
     mtime: i64,
     provenance: (&str, &str),
     variant: &str,
+    watertight: bool,
 ) -> Result<(i64, Upsert)> {
     let dir = Path::new(path)
         .parent()
@@ -207,20 +209,24 @@ pub fn upsert_model(
             // Provenance is not overwritten on rescan: it may have been
             // corrected by hand since, and a guess must not clobber that.
             "UPDATE models SET name=?2, size=?3, hash=?4, triangles=?5,
-                    dim_x=?6, dim_y=?7, dim_z=?8, mtime=?9, volume=?10
+                    dim_x=?6, dim_y=?7, dim_z=?8, mtime=?9, volume=?10,
+                    variant=?11, watertight=?12
              WHERE id=?1",
-            params![id, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume],
+            params![
+                id, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume,
+                variant, watertight
+            ],
         )?;
         return Ok((id, Upsert::Updated));
     }
 
     conn.execute(
         "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime,
-                             volume, creator, source, dir, parent_dir, variant)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                             volume, creator, source, dir, parent_dir, variant, watertight)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume,
-            provenance.0, provenance.1, dir, parent_dir, variant
+            provenance.0, provenance.1, dir, parent_dir, variant, watertight
         ],
     )?;
     Ok((conn.last_insert_rowid(), Upsert::Added))
@@ -233,7 +239,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
                 (SELECT path FROM images WHERE id = models.image_id),
                 (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
                 (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id),
-                variant
+                variant, watertight
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -333,6 +339,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             print_count: row.get(16)?,
             last_printed: row.get(17)?,
             variant: row.get(18)?,
+            watertight: row.get::<_, i64>(19)? != 0,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -389,7 +396,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     (SELECT path FROM images WHERE id = models.image_id),
                     (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
                     (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id),
-                    variant
+                    variant, watertight
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -413,6 +420,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     print_count: row.get(16)?,
                     last_printed: row.get(17)?,
                     variant: row.get(18)?,
+                    watertight: row.get::<_, i64>(19)? != 0,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -807,6 +815,7 @@ mod tests {
             1000,
             ("", ""),
             "",
+            true,
         )
         .unwrap()
         .0
@@ -825,7 +834,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         upsert_model(
-            conn, path, &name, size, hash, 12, [1.0, 2.0, 3.0], 100.0, 1000, ("", ""), "",
+            conn, path, &name, size, hash, 12, [1.0, 2.0, 3.0], 100.0, 1000, ("", ""), "", true,
         )
         .unwrap()
         .0
@@ -1172,7 +1181,7 @@ mod tests {
         let conn = db();
         let id = upsert_model(
             &conn, "/lib/Creator/x.stl", "x", 10, "h", 12, [1.0, 1.0, 1.0], 1.0, 100,
-            ("Homonculus Creations", "Patreon 0121"), "",
+            ("Homonculus Creations", "Patreon 0121"), "", true,
         )
         .unwrap()
         .0;
@@ -1193,7 +1202,7 @@ mod tests {
         let conn = db();
         let id = upsert_model(
             &conn, "/lib/Gods/x.stl", "x", 10, "h1", 12, [1.0, 1.0, 1.0], 1.0, 100,
-            ("Gods", "Patreon 0121"), "",
+            ("Gods", "Patreon 0121"), "", true,
         )
         .unwrap()
         .0;
@@ -1202,7 +1211,7 @@ mod tests {
         // The file changed, so this is an update rather than a no-op.
         upsert_model(
             &conn, "/lib/Gods/x.stl", "x", 99, "h2", 12, [1.0, 1.0, 1.0], 1.0, 200,
-            ("Gods", "Patreon 0121"), "",
+            ("Gods", "Patreon 0121"), "", true,
         )
         .unwrap();
 

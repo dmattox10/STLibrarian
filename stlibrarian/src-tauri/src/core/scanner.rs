@@ -192,6 +192,7 @@ fn index_file(conn: &Connection, path: &Path, root: &Path) -> Result<Upsert, Str
         mtime,
         (&creator, &source),
         &detect_variant(path),
+        geometry.watertight,
     )
     .map_err(|e| e.to_string())?;
 
@@ -265,10 +266,19 @@ mod tests {
 
     #[test]
     fn mesh_extension_matching_is_case_insensitive() {
-        for good in ["/a/Benchy.stl", "/a/Benchy.STL", "/a/Benchy.Stl", "/a/Benchy.obj", "/a/B.OBJ"] {
+        for good in [
+            "/a/Benchy.stl",
+            "/a/Benchy.STL",
+            "/a/Benchy.Stl",
+            "/a/Benchy.obj",
+            "/a/B.OBJ",
+            "/a/Benchy.3mf",
+            "/a/B.3MF",
+        ] {
             assert!(stl::is_supported_mesh(Path::new(good)), "{}", good);
         }
-        for bad in ["/a/Benchy.3mf", "/a/stl", "/a/notes.txt"] {
+        // An extension is not a filename, and neither is a readme.
+        for bad in ["/a/stl", "/a/3mf", "/a/notes.txt", "/a/model.gcode"] {
             assert!(!stl::is_supported_mesh(Path::new(bad)), "{}", bad);
         }
     }

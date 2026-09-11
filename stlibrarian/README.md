@@ -38,6 +38,43 @@ shown once and never stored in plaintext, so save it then.
 | `STLIBRARIAN_BIND` | `0.0.0.0:3000` | Server listen address |
 | `STLIBRARIAN_WEB_ROOT` | `../dist` | Built front end to serve |
 
+## What it knows about a model
+
+Scanning reads `.stl`, `.obj` and `.3mf` and records size, triangle count,
+bounding box and enclosed volume. Volume matters more than it sounds: multiply
+by a resin density and you have the grams a print will cost, which is the
+number you want before opening a new bottle. Bounding box answers "will this
+fit on my bed?" without opening anything.
+
+Volume is only meaningful for a closed mesh, so each file is also checked for
+watertightness -- every edge shared by exactly two triangles. That is computed
+in constant memory by XOR-ing a hash of each edge, because holding nine million
+edges for a three million triangle model would cost hundreds of megabytes to
+learn one boolean. A mesh with holes is flagged, its volume is not dressed up
+as a resin weight, and it is the kind of file that may not slice cleanly.
+
+Each file also gets a **variant** -- supported or unsupported -- read from its
+path, because packs ship both and printing the wrong one wastes an evening.
+And a **creator** and **source**, guessed from the folder layout and freely
+editable. A rescan never overwrites a correction.
+
+## Previews
+
+Rendered in Rust. A software rasteriser streams the mesh a triangle at a time,
+so a three million triangle model costs the same memory as a cube and comes
+out at full detail -- the thumbnail shows more than the interactive viewer
+does. Nothing needs a GPU, a window, or a browser, which is what lets a
+headless NAS build its own previews instead of waiting for somebody to visit
+it.
+
+When a creator ships their own render beside the mesh, that is used instead.
+It is posed, lit and often painted; nothing generated from raw geometry
+competes. The inspector lets you override the choice or go back to the
+generated one.
+
+The interactive viewer draws Solid, Wire or Points. Points has no surface to
+hide behind, so interior structure and wall thickness show through.
+
 ## Organising a library
 
 **Tags** describe a property the members share. Type one in the inspector, or
@@ -60,15 +97,30 @@ Selection follows the conventions every file manager uses:
 | escape | clear the selection |
 
 With anything selected, a bar appears at the bottom of the grid: add or remove
-a tag across the whole selection, or add it to (or take it out of) a
-collection. It reports what actually changed, so "tagged 12" of a selection of
-40 tells you the other 28 already had it.
+a tag across the whole selection, add it to a collection, or group it into a
+package. It reports what actually changed, so "tagged 12" of a selection of 40
+tells you the other 28 already had it.
+
+**Packages** are several files that are one model -- a body, two wings and an
+arm. Scanning *suggests* groupings and never applies them, because a folder of
+STLs is as often a folder of unrelated models as it is one model in pieces.
+Suggestions collapse variant folders, so the supported and unsupported copies
+of a model are recognised as the same model.
+
+**Duplicates** are found from the content hashes every file already carries. It
+reports what is stored twice and what keeping one copy would return; it does
+not delete anything.
+
+**Prints** record what you actually made: printer, material, settings, outcome,
+notes. Failures count too -- how many attempts a model took is the interesting
+part. The grid marks what you have printed, and the top bar filters to what you
+never have, which is the question a pile of downloads cannot answer.
 
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --no-default-features --lib   # core: 36 tests
-tools/e2e.sh                                             # server + API: 47 checks
+cd src-tauri && cargo test --no-default-features --lib   # core: 101 tests
+tools/e2e.sh                                             # server + API: 114 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
@@ -90,7 +142,9 @@ src/
 
 src-tauri/src/
   core/          shared by both binaries, depends on neither
-    db.rs          SQLite: models, tags, collections, users, sessions
+    db.rs          SQLite: models, tags, collections, packages, prints, users
+    raster.rs      software renderer -- previews with no GPU
+    organize.rs    the only code that writes to your files (Pro)
     scanner.rs     streaming walk and hash
     stl.rs         triangle count and bounding box, streaming
     auth.rs        argon2 passwords, session tokens
@@ -128,6 +182,18 @@ whole STL, and there is only one GPU context to share.
 Left-drag orbits, scroll zooms, right-drag pans, and Reset re-frames if you
 lose the model off screen. Auto-spin rotates the mesh rather than the camera,
 so it does not fight an orbit you set yourself.
+
+## Pro: organising files on disk
+
+Everything above is metadata. Scanning reads and never writes, so the desktop
+client is a front end over a database and your folders are left exactly as they
+are.
+
+Rearranging files for real is the Pro server's job. It files models as
+`creator / model / variant`, plans every move before making one, never
+overwrites anything, and recomputes the plan itself rather than trusting one
+sent by a client. It exists once, on the server, rather than once per desktop
+platform -- which is the other reason it belongs there.
 
 ## Design language
 

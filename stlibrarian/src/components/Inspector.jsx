@@ -12,6 +12,7 @@ import {
   formatDims,
   formatVolume,
   formatWeight,
+  volumeLooksReliable,
 } from "../lib/format.js";
 
 function TagEditor({ model, api, onChanged }) {
@@ -184,9 +185,27 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
           {formatVolume(model.volume) ? (
             <>
               <dt>Volume</dt>
-              <dd>{formatVolume(model.volume)}</dd>
-              <dt>Resin</dt>
-              <dd title="Solid, so an upper bound">&asymp; {formatWeight(model.volume)}</dd>
+              <dd
+                title={
+                  volumeLooksReliable(model)
+                    ? "Solid volume, from a closed mesh"
+                    : "The mesh is not closed, so this is not the volume of anything"
+                }
+                style={
+                  volumeLooksReliable(model) ? undefined : { color: "var(--nord13)" }
+                }
+              >
+                {formatVolume(model.volume)}
+                {volumeLooksReliable(model) ? "" : " ?"}
+              </dd>
+              {volumeLooksReliable(model) ? (
+                <>
+                  <dt>Resin</dt>
+                  <dd title="Solid, so an upper bound">
+                    &asymp; {formatWeight(model.volume)}
+                  </dd>
+                </>
+              ) : null}
             </>
           ) : null}
           {bed !== null ? (
@@ -206,6 +225,10 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
               </dd>
             </>
           ) : null}
+          <dt>Mesh</dt>
+          <dd style={{ color: model.watertight ? "var(--nord14)" : "var(--nord13)" }}>
+            {model.watertight ? "Closed" : "Has holes"}
+          </dd>
           <dt>Modified</dt>
           <dd>{formatDate(model.mtime)}</dd>
           <dt>Path</dt>

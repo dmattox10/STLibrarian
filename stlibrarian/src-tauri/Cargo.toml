@@ -66,6 +66,10 @@ png = "0.17"
 # anything generated from the mesh. Decode + downscale only; no encoders beyond
 # the png crate above.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# 3MF is a zip of XML. Increasingly what a slicer hands you, and what a
+# creator ships alongside the STLs.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
 
 # --- desktop only ---
 tauri = { version = "2", features = [], optional = true }

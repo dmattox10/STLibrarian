@@ -31,6 +31,9 @@ pub struct ModelRecord {
     /// know when looking at a wall of models you half remember.
     pub print_count: i64,
     pub last_printed: Option<i64>,
+    /// Every edge shared by exactly two triangles. When false, `volume` is
+    /// not the volume of anything and the file may not slice.
+    pub watertight: bool,
     /// "supported", "unsupported", or empty when the path says nothing.
     /// Creators ship both, and which one you are looking at matters.
     pub variant: String,

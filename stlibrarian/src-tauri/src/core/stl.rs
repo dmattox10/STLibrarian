@@ -17,8 +17,14 @@ pub struct StlMeta {
     /// density and you have grams, which is what a print actually costs.
     ///
     /// Only meaningful for a closed mesh. An open shell still yields a number,
-    /// it just is not the volume of anything.
+    /// it just is not the volume of anything -- see `watertight`.
     pub volume: f32,
+    /// Every edge shared by exactly two triangles.
+    ///
+    /// A sculpted model is often not closed, and an open mesh makes `volume`
+    /// meaningless rather than merely imprecise. Knowing which you have is
+    /// also the difference between a model that slices and one that does not.
+    pub watertight: bool,
 }
 
 impl StlMeta {
@@ -28,6 +34,7 @@ impl StlMeta {
             min: [0.0; 3],
             max: [0.0; 3],
             volume: 0.0,
+            watertight: false,
         }
     }
 
@@ -50,8 +57,47 @@ pub fn read_meta(path: &Path) -> std::io::Result<StlMeta> {
     let mut triangles = 0u32;
     let mut six_volume = 0f64;
 
+    // Edge parity, in constant memory.
+    //
+    // In a closed mesh every edge is shared by exactly two triangles, so
+    // XOR-ing a hash of each undirected edge cancels everything and leaves
+    // zero. Anything left over is a boundary. The alternative -- a set of nine
+    // million edges for a three million triangle model -- is hundreds of
+    // megabytes to learn one boolean.
+    //
+    // Vertices are identified by their exact bit patterns. A well-formed mesh
+    // repeats coincident corners exactly; one that does not is not watertight
+    // in any useful sense either.
+    let mut edge_parity: u64 = 0;
+    let vertex_key = |v: [f32; 3]| -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for c in v {
+            // Normalise -0.0, which has different bits from 0.0 and would
+            // otherwise split a shared corner in two.
+            let bits = u64::from((if c == 0.0 { 0.0 } else { c }).to_bits());
+            h = (h ^ bits).wrapping_mul(0x1000_0000_01b3);
+        }
+        h
+    };
+
     for_each_triangle(path, |tri| {
         triangles += 1;
+
+        let keys = [vertex_key(tri[0]), vertex_key(tri[1]), vertex_key(tri[2])];
+        for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+            // Undirected: the two triangles sharing an edge traverse it in
+            // opposite directions, so the pair has to be ordered.
+            let (lo, hi) = if keys[a] < keys[b] {
+                (keys[a], keys[b])
+            } else {
+                (keys[b], keys[a])
+            };
+            let mut e = lo.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ hi;
+            e ^= e >> 29;
+            e = e.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            e ^= e >> 32;
+            edge_parity ^= e;
+        }
         for v in &tri {
             for axis in 0..3 {
                 if v[axis].is_finite() {
@@ -85,6 +131,7 @@ pub fn read_meta(path: &Path) -> std::io::Result<StlMeta> {
         min,
         max,
         volume: (six_volume / 6.0).abs() as f32,
+        watertight: edge_parity == 0,
     })
 }
 
@@ -237,7 +284,7 @@ fn cluster(path: &Path, meta: StlMeta, max: u32) -> std::io::Result<PreviewMesh>
 /// Stream triangles out of either STL flavour, one callback per facet.
 /// True for every mesh format the library can read.
 pub fn is_supported_mesh(path: &Path) -> bool {
-    matches!(extension_of(path).as_str(), "stl" | "obj")
+    matches!(extension_of(path).as_str(), "stl" | "obj" | "3mf")
 }
 
 pub(crate) fn extension_of(path: &Path) -> String {
@@ -311,9 +358,95 @@ fn for_each_triangle_obj<F: FnMut([[f32; 3]; 3])>(
     Ok(())
 }
 
+/// 3MF: a zip archive whose payload is an XML model part.
+///
+/// Only the geometry is read. Build transforms are ignored, so a file holding
+/// several objects placed around a plate reports them all in their own local
+/// coordinates -- fine for a preview and for a triangle count, wrong if you
+/// wanted the arrangement. Single-object files, which is nearly all of them
+/// outside a slicer's save format, are exact.
+fn for_each_triangle_3mf<F: FnMut([[f32; 3]; 3])>(
+    path: &Path,
+    f: &mut F,
+) -> std::io::Result<()> {
+    let file = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+    // Conventionally 3D/3dmodel.model, but the name is not mandated, so take
+    // whatever .model part the archive actually carries.
+    let part = archive
+        .file_names()
+        .find(|n| n.to_ascii_lowercase().ends_with(".model"))
+        .map(|n| n.to_string())
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "no model part in 3mf")
+        })?;
+
+    let entry = archive
+        .by_name(&part)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+    let mut reader = quick_xml::Reader::from_reader(BufReader::new(entry));
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut verts: Vec<[f32; 3]> = Vec::new();
+
+    loop {
+        let event = reader
+            .read_event_into(&mut buf)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+        match event {
+            quick_xml::events::Event::Eof => break,
+            quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+                let name = e.local_name();
+                let tag = String::from_utf8_lossy(name.as_ref()).to_string();
+                let attr = |key: &str| -> Option<String> {
+                    e.attributes().flatten().find_map(|a| {
+                        if a.key.local_name().as_ref() == key.as_bytes() {
+                            Some(String::from_utf8_lossy(&a.value).to_string())
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                match tag.as_str() {
+                    // Each object carries its own vertex table.
+                    "mesh" => verts.clear(),
+                    "vertex" => {
+                        let get = |k: &str| attr(k).and_then(|v| v.parse::<f32>().ok());
+                        if let (Some(x), Some(y), Some(z)) = (get("x"), get("y"), get("z")) {
+                            if x.is_finite() && y.is_finite() && z.is_finite() {
+                                verts.push([x, y, z]);
+                            }
+                        }
+                    }
+                    "triangle" => {
+                        let get = |k: &str| attr(k).and_then(|v| v.parse::<usize>().ok());
+                        if let (Some(a), Some(b), Some(c)) = (get("v1"), get("v2"), get("v3")) {
+                            if a < verts.len() && b < verts.len() && c < verts.len() {
+                                f([verts[a], verts[b], verts[c]]);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
+}
+
 pub(crate) fn for_each_triangle<F: FnMut([[f32; 3]; 3])>(path: &Path, mut f: F) -> std::io::Result<()> {
-    if extension_of(path) == "obj" {
-        return for_each_triangle_obj(path, &mut f);
+    match extension_of(path).as_str() {
+        "obj" => return for_each_triangle_obj(path, &mut f),
+        "3mf" => return for_each_triangle_3mf(path, &mut f),
+        _ => {}
     }
 
     let file = File::open(path)?;
@@ -488,6 +621,109 @@ endsolid cube
         std::fs::remove_file(p).ok();
     }
 
+    // ----------------------------------------------------------- 3mf ----
+
+    fn make_3mf(part_name: &str, xml: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            w.start_file(part_name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(xml.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    const TETRA_3MF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+ <resources>
+  <object id="1" type="model">
+   <mesh>
+    <vertices>
+     <vertex x="0" y="0" z="0"/>
+     <vertex x="2" y="0" z="0"/>
+     <vertex x="0" y="3" z="0"/>
+     <vertex x="0" y="0" z="4"/>
+    </vertices>
+    <triangles>
+     <triangle v1="0" v2="1" v3="2"/>
+     <triangle v1="0" v2="1" v3="3"/>
+     <triangle v1="1" v2="2" v3="3"/>
+     <triangle v1="0" v2="2" v3="3"/>
+    </triangles>
+   </mesh>
+  </object>
+ </resources>
+ <build><item objectid="1"/></build>
+</model>"#;
+
+    #[test]
+    fn a_3mf_is_read_like_any_other_mesh() {
+        let p = tmp("model.3mf", &make_3mf("3D/3dmodel.model", TETRA_3MF));
+        let meta = read_meta(&p).unwrap();
+        assert_eq!(meta.triangles, 4);
+        assert_eq!(meta.min, [0.0, 0.0, 0.0]);
+        assert_eq!(meta.max, [2.0, 3.0, 4.0]);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// The part name is conventional, not mandated.
+    #[test]
+    fn the_model_part_is_found_wherever_it_sits() {
+        let p = tmp("odd.3mf", &make_3mf("Objects/object_1.model", TETRA_3MF));
+        assert_eq!(read_meta(&p).unwrap().triangles, 4);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn a_3mf_previews_like_the_others() {
+        let p = tmp("prev.3mf", &make_3mf("3D/3dmodel.model", TETRA_3MF));
+        let mesh = read_preview(&p, 1000).unwrap();
+        assert_eq!(mesh.triangles, 4);
+        assert_eq!(mesh.positions.len(), 4 * 9);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// Each object has its own vertex table, so indices must not leak between
+    /// them -- getting that wrong builds triangles out of another object's
+    /// corners and the mesh comes out as noise.
+    #[test]
+    fn vertex_tables_do_not_leak_between_objects() {
+        let two = r#"<model>
+ <resources>
+  <object id="1"><mesh>
+    <vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices>
+    <triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+  </mesh></object>
+  <object id="2"><mesh>
+    <vertices><vertex x="0" y="0" z="0"/><vertex x="9" y="0" z="0"/><vertex x="0" y="9" z="0"/></vertices>
+    <triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+  </mesh></object>
+ </resources>
+</model>"#;
+        let p = tmp("two.3mf", &make_3mf("3D/3dmodel.model", two));
+        let meta = read_meta(&p).unwrap();
+        assert_eq!(meta.triangles, 2);
+        assert_eq!(meta.max, [9.0, 9.0, 0.0]);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn a_3mf_with_no_model_part_is_an_error_not_a_panic() {
+        let p = tmp("empty.3mf", &make_3mf("doc.txt", "not a model"));
+        assert!(read_meta(&p).is_err());
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn something_that_is_not_a_zip_is_an_error() {
+        let p = tmp("fake.3mf", b"this is plainly not an archive");
+        assert!(read_meta(&p).is_err());
+        std::fs::remove_file(p).ok();
+    }
+
     // ----------------------------------------------------------- obj ----
 
     #[test]
@@ -589,6 +825,45 @@ f 1 2 0
             (2, 7, 3), (2, 6, 7), (3, 4, 0), (3, 7, 4),
         ];
         faces.iter().map(|&(a, b, c)| [p[a], p[b], p[c]]).collect()
+    }
+
+    #[test]
+    fn a_closed_cube_is_watertight() {
+        let p = tmp("wt_cube.stl", &binary_stl(&cube([0.0, 0.0, 0.0], 20.0)));
+        assert!(read_meta(&p).unwrap().watertight);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// The case that motivated it: an open shell still reports a volume, and
+    /// that volume is not the volume of anything.
+    #[test]
+    fn a_cube_missing_a_face_is_not_watertight() {
+        let mut faces = cube([0.0, 0.0, 0.0], 20.0);
+        faces.truncate(faces.len() - 2); // drop one square, two triangles
+        let p = tmp("wt_open.stl", &binary_stl(&faces));
+        let meta = read_meta(&p).unwrap();
+        assert!(!meta.watertight, "an open box must not claim to be closed");
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn a_single_triangle_is_not_watertight() {
+        let p = tmp(
+            "wt_tri.stl",
+            &binary_stl(&[[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]),
+        );
+        assert!(!read_meta(&p).unwrap().watertight);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// Two separate closed solids in one file are still closed.
+    #[test]
+    fn two_closed_solids_in_one_file_are_watertight() {
+        let mut faces = cube([0.0, 0.0, 0.0], 10.0);
+        faces.extend(cube([100.0, 0.0, 0.0], 10.0));
+        let p = tmp("wt_two.stl", &binary_stl(&faces));
+        assert!(read_meta(&p).unwrap().watertight);
+        std::fs::remove_file(p).ok();
     }
 
     #[test]

@@ -210,6 +210,9 @@ PYCUBE
 post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
 CUBE_ID="$(api "$BASE/api/models?search=cube" | jfirst id)"
 check "10mm cube is 1000 mm3" "$(api "$BASE/api/models/$CUBE_ID" | python3 -c 'import sys,json;print(round(json.load(sys.stdin)["volume"]))')" 1000
+check "  and the mesh is closed"  "$(api "$BASE/api/models/$CUBE_ID" | python3 -c 'import sys,json;print(json.load(sys.stdin)["watertight"])')" "True"
+# The fixtures are open shells, so they must not claim otherwise.
+check "an open shell is flagged"  "$(api "$BASE/api/models?search=widget" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["watertight"])')" "False"
 
 echo "== server-side rendering =="
 # No PUT first: the server has to rasterise this itself, which is the whole
@@ -363,6 +366,32 @@ check "presupported detected"    "$(api "$BASE/api/models?search=knight" | jfirs
 check "unsupported detected"     "$(api "$BASE/api/models?search=body" | jfirst variant)" "unsupported"
 check "filter by variant"        "$(api "$BASE/api/models?variant=supported" | jlen)" 1
 check "  the two do not overlap" "$(api "$BASE/api/models?variant=unsupported" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["variant"]!="unsupported"))')" 0
+
+python3 - "$WORK/models/Pack/widget.3mf" <<'PY3MF'
+import sys, zipfile, pathlib
+xml = """<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter">
+ <resources><object id="1" type="model"><mesh>
+  <vertices>
+   <vertex x="0" y="0" z="0"/><vertex x="7" y="0" z="0"/>
+   <vertex x="0" y="8" z="0"/><vertex x="0" y="0" z="9"/>
+  </vertices>
+  <triangles>
+   <triangle v1="0" v2="1" v3="2"/><triangle v1="0" v2="1" v3="3"/>
+   <triangle v1="1" v2="2" v3="3"/><triangle v1="0" v2="2" v3="3"/>
+  </triangles>
+ </mesh></object></resources>
+ <build><item objectid="1"/></build>
+</model>"""
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("3D/3dmodel.model", xml)
+PY3MF
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+THREEMF="$(api "$BASE/api/models" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["path"].endswith(".3mf")))')"
+check "  the 3mf is in the library" "$THREEMF" 1
+check "  triangles counted"      "$(api "$BASE/api/models?sort=name" | python3 -c 'import sys,json;print(next(m["triangles"] for m in json.load(sys.stdin) if m["path"].endswith(".3mf")))')" 4
+check "  bounds measured"        "$(api "$BASE/api/models" | python3 -c 'import sys,json;m=next(m for m in json.load(sys.stdin) if m["path"].endswith(".3mf"));print("%gx%gx%g" % (m["dim_x"],m["dim_y"],m["dim_z"]))')" "7x8x9"
+check "  and it previews"        "$(api_code "$BASE/api/thumb/$(api "$BASE/api/models" | python3 -c 'import sys,json;print(next(m["hash"] for m in json.load(sys.stdin) if m["path"].endswith(".3mf")))')")" 200
 
 echo "== organising files on disk (Pro) =="
 # Deliberately last: this is the only thing that moves the fixtures, so every

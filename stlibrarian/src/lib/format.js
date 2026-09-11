@@ -59,6 +59,19 @@ export function tagColor(name) {
 /** Resin and filament densities, g/cm3. Close enough for a shopping decision. */
 const DENSITY = { resin: 1.1, pla: 1.24 };
 
+/**
+ * Whether the volume means anything.
+ *
+ * It comes from summing signed tetrahedra, which is exact for a closed mesh
+ * and meaningless for an open one -- and sculpted models frequently are not
+ * closed. This used to guess from the volume-to-bounding-box ratio, which
+ * cannot tell a genuinely thin model from a mesh full of holes. The backend
+ * now counts edge parity instead, so this is a fact rather than a hunch.
+ */
+export function volumeLooksReliable(model) {
+  return Boolean(model?.volume > 0 && model?.watertight);
+}
+
 export function formatVolume(mm3) {
   if (!mm3 || mm3 <= 0) return null;
   const cm3 = mm3 / 1000;
