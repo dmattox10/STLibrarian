@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
-    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, Package,
-    PackageSuggestion, ScanReport, TagCount, User,
+    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
+    PackageSuggestion, PrintRecord, ScanReport, TagCount, User,
 };
 use stlibrarian_lib::core::{auth, db, paths, scanner, stl, thumbs};
 use tokio_util::io::ReaderStream;
@@ -166,6 +166,7 @@ struct ModelsParams {
     collection: Option<i64>,
     creator: Option<String>,
     package: Option<i64>,
+    printed: Option<bool>,
     sort: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -183,6 +184,7 @@ impl From<ModelsParams> for LibraryQuery {
                 .filter(|t| !t.is_empty())
                 .collect(),
             collection: p.collection,
+            printed: p.printed,
             creator: p.creator,
             package: p.package,
             sort: p.sort,
@@ -469,6 +471,38 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
         .map(|changed| Json(Changed { changed }))
 }
 
+// ---------------------------------------------------------------- prints ----
+
+async fn prints_route(Path(id): Path<i64>) -> Result<Json<Vec<PrintRecord>>, ApiError> {
+    with_db(move |conn| db::list_prints(conn, id).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+#[derive(Serialize)]
+struct Created {
+    id: i64,
+}
+
+async fn log_print_route(
+    Path(id): Path<i64>,
+    Json(entry): Json<NewPrint>,
+) -> Result<Json<Created>, ApiError> {
+    let made = tokio::task::spawn_blocking(move || -> std::result::Result<i64, String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::add_print(&conn, id, &entry)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    // A bad outcome value is the caller's mistake, so 400 with the reason.
+    made.map(|id| Json(Created { id })).map_err(bad)
+}
+
+async fn delete_print_route(Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| db::delete_print(conn, id).map_err(|e| e.to_string())).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --------------------------------------------------------------- renders ----
 
 #[derive(Deserialize)]
@@ -658,6 +692,9 @@ async fn main() {
         .route("/packages/{id}", delete(delete_package_route))
         .route("/packages/{id}/models", post(assign_package_route))
         .route("/duplicates", get(duplicates_route))
+        .route("/models/{id}/prints", get(prints_route))
+        .route("/models/{id}/prints", post(log_print_route))
+        .route("/prints/{id}", delete(delete_print_route))
         .route("/models/{id}/renders", get(model_renders_route))
         .route("/models/{id}/render", post(set_render_route))
         .route("/creators", get(creators_route))

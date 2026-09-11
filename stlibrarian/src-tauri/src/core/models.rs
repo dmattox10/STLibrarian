@@ -26,6 +26,11 @@ pub struct ModelRecord {
     /// A creator's render sitting beside the file, used as the preview when
     /// present. None means the preview is drawn from the mesh.
     pub render: Option<String>,
+    /// How many times this has been printed, and when last. The print
+    /// equivalent of Plex's watched marker -- the single most useful thing to
+    /// know when looking at a wall of models you half remember.
+    pub print_count: i64,
+    pub last_printed: Option<i64>,
     pub mtime: i64,
     pub tags: Vec<String>,
     /// Names of the collections holding this model. Denormalised onto the row
@@ -64,6 +69,10 @@ pub struct LibraryQuery {
     /// Restrict to one collection. Combines with search and tags rather than
     /// replacing them, so you can search inside a collection.
     pub collection: Option<i64>,
+    /// Some(true) for models you have printed, Some(false) for ones you never
+    /// have. "What have I never actually made?" is the question a pile of
+    /// downloads cannot answer and a library can.
+    pub printed: Option<bool>,
     pub creator: Option<String>,
     pub package: Option<i64>,
     pub sort: Option<String>,
@@ -87,6 +96,8 @@ pub struct LibraryStats {
     pub tags: i64,
     pub missing: i64,
     pub without_thumb: i64,
+    /// Models printed at least once.
+    pub printed: i64,
 }
 
 /// A curated, named set of models.
@@ -139,4 +150,64 @@ pub struct DuplicateGroup {
     /// Bytes that would come back by keeping one copy.
     pub wasted_bytes: i64,
     pub models: Vec<ModelRecord>,
+}
+
+/// One time you actually printed something.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrintRecord {
+    pub id: i64,
+    pub model_id: i64,
+    pub printed_at: i64,
+    pub printer: String,
+    pub material: String,
+    /// Free text on purpose: layer height, exposure, supports, whatever you
+    /// would have written on a sticky note. A schema here would be wrong for
+    /// every printer but the one it was designed against.
+    pub settings: String,
+    pub outcome: PrintOutcome,
+    pub notes: String,
+    /// A photo of the result, if you took one.
+    pub photo: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrintOutcome {
+    Success,
+    Partial,
+    Failed,
+}
+
+impl PrintOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrintOutcome::Success => "success",
+            PrintOutcome::Partial => "partial",
+            PrintOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "success" => Some(PrintOutcome::Success),
+            "partial" => Some(PrintOutcome::Partial),
+            "failed" => Some(PrintOutcome::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// A print being logged. Everything optional except the outcome, because the
+/// friction of a long form is how a log stops being kept.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NewPrint {
+    /// Defaults to now.
+    pub printed_at: Option<i64>,
+    pub printer: String,
+    pub material: String,
+    pub settings: String,
+    pub outcome: String,
+    pub notes: String,
+    pub photo: Option<String>,
 }

@@ -1,5 +1,6 @@
 use crate::core::models::{
-    Collection, DuplicateGroup, LibraryQuery, ModelRecord, Package, PackageSuggestion, TagCount,
+    Collection, DuplicateGroup, LibraryQuery, ModelRecord, Package, PackageSuggestion, PrintRecord,
+    TagCount,
 };
 use log::error;
 use rusqlite::{params, Connection, OptionalExtension, Result};
@@ -60,6 +61,17 @@ fn migrate(conn: &Connection) -> Result<()> {
             password_hash TEXT NOT NULL,
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prints (
+            id         INTEGER PRIMARY KEY,
+            model_id   INTEGER NOT NULL,
+            printed_at INTEGER NOT NULL,
+            printer    TEXT NOT NULL DEFAULT '',
+            material   TEXT NOT NULL DEFAULT '',
+            settings   TEXT NOT NULL DEFAULT '',
+            outcome    TEXT NOT NULL,
+            notes      TEXT NOT NULL DEFAULT '',
+            photo      TEXT
         );
         CREATE TABLE IF NOT EXISTS images (
             id    INTEGER PRIMARY KEY,
@@ -142,6 +154,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_models_creator ON models(creator);
         CREATE INDEX IF NOT EXISTS idx_models_dir ON models(dir);
         CREATE INDEX IF NOT EXISTS idx_images_dir ON images(dir);
+        CREATE INDEX IF NOT EXISTS idx_prints_model ON prints(model_id);
         ",
     )?;
     Ok(())
@@ -215,7 +228,9 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
     let mut sql = String::from(
         "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
                 volume, creator, source, package_id,
-                (SELECT path FROM images WHERE id = models.image_id)
+                (SELECT path FROM images WHERE id = models.image_id),
+                (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
+                (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id)
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -251,6 +266,14 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             " AND id IN (SELECT model_id FROM collection_models WHERE collection_id = ?)",
         );
         binds.push(Box::new(collection_id));
+    }
+
+    if let Some(printed) = q.printed {
+        if printed {
+            sql.push_str(" AND EXISTS (SELECT 1 FROM prints WHERE prints.model_id = models.id)");
+        } else {
+            sql.push_str(" AND NOT EXISTS (SELECT 1 FROM prints WHERE prints.model_id = models.id)");
+        }
     }
 
     if let Some(creator) = q.creator.as_ref().map(|c| c.trim()).filter(|c| !c.is_empty()) {
@@ -299,6 +322,8 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             source: row.get(13)?,
             package_id: row.get(14)?,
             render: row.get(15)?,
+            print_count: row.get(16)?,
+            last_printed: row.get(17)?,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -352,7 +377,9 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
         .query_row(
             "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
                     volume, creator, source, package_id,
-                    (SELECT path FROM images WHERE id = models.image_id)
+                    (SELECT path FROM images WHERE id = models.image_id),
+                    (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
+                    (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id)
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -373,6 +400,8 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     source: row.get(13)?,
                     package_id: row.get(14)?,
                     render: row.get(15)?,
+                    print_count: row.get(16)?,
+                    last_printed: row.get(17)?,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -454,6 +483,7 @@ pub fn delete_model(conn: &Connection, model_id: i64) -> Result<()> {
         "DELETE FROM collection_models WHERE model_id = ?1",
         params![model_id],
     )?;
+    conn.execute("DELETE FROM prints WHERE model_id = ?1", params![model_id])?;
     conn.execute("DELETE FROM models WHERE id = ?1", params![model_id])?;
     Ok(())
 }
@@ -485,12 +515,18 @@ pub fn library_stats(conn: &Connection) -> Result<crate::core::models::LibrarySt
         |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, Option<i64>>(2)?.unwrap_or(0))),
     )?;
     let tags: i64 = conn.query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0))?;
+    let printed: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT model_id) FROM prints",
+        [],
+        |r| r.get(0),
+    )?;
     Ok(crate::core::models::LibraryStats {
         models,
         total_bytes,
         tags,
         missing: 0,
         without_thumb,
+        printed,
     })
 }
 
@@ -891,6 +927,110 @@ mod tests {
         assert!(list_packages(&conn).unwrap().is_empty());
         let still = get_model(&conn, a).unwrap().expect("model survives");
         assert!(still.package_id.is_none());
+    }
+
+    // ---------------------------------------------------------- prints ----
+
+    fn a_print(outcome: &str) -> crate::core::models::NewPrint {
+        crate::core::models::NewPrint {
+            outcome: outcome.into(),
+            printer: "Mars 4 Ultra".into(),
+            material: "ABS-like grey".into(),
+            settings: "0.05mm, 2.4s exposure".into(),
+            notes: "supports on the base".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn logging_a_print_shows_up_on_the_model() {
+        let conn = db();
+        let id = model(&conn, "dragon");
+        assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 0);
+
+        add_print(&conn, id, &a_print("success")).unwrap();
+        let m = get_model(&conn, id).unwrap().unwrap();
+        assert_eq!(m.print_count, 1);
+        assert!(m.last_printed.is_some());
+
+        let history = list_prints(&conn, id).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].printer, "Mars 4 Ultra");
+        assert_eq!(history[0].outcome, crate::core::models::PrintOutcome::Success);
+    }
+
+    #[test]
+    fn a_failed_attempt_is_still_a_record() {
+        let conn = db();
+        let id = model(&conn, "dragon");
+        add_print(&conn, id, &a_print("failed")).unwrap();
+        add_print(&conn, id, &a_print("success")).unwrap();
+
+        let history = list_prints(&conn, id).unwrap();
+        assert_eq!(history.len(), 2);
+        // Both count: how many attempts a model took is the interesting part.
+        assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 2);
+    }
+
+    #[test]
+    fn an_unknown_outcome_is_refused() {
+        let conn = db();
+        let id = model(&conn, "dragon");
+        assert!(add_print(&conn, id, &a_print("maybe")).is_err());
+        assert!(add_print(&conn, id, &a_print("")).is_err());
+        assert_eq!(list_prints(&conn, id).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_print_needs_a_model_that_exists() {
+        let conn = db();
+        assert!(add_print(&conn, 9999, &a_print("success")).is_err());
+    }
+
+    /// The question a pile of downloads cannot answer.
+    #[test]
+    fn never_printed_is_filterable() {
+        let conn = db();
+        let printed = model(&conn, "printed");
+        model(&conn, "untouched");
+        add_print(&conn, printed, &a_print("success")).unwrap();
+
+        assert_eq!(
+            names(&conn, &LibraryQuery { printed: Some(true), ..Default::default() }),
+            vec!["printed"]
+        );
+        assert_eq!(
+            names(&conn, &LibraryQuery { printed: Some(false), ..Default::default() }),
+            vec!["untouched"]
+        );
+        // Unset means no filter at all, not "false".
+        assert_eq!(names(&conn, &LibraryQuery::default()).len(), 2);
+    }
+
+    #[test]
+    fn deleting_a_print_leaves_the_rest() {
+        let conn = db();
+        let id = model(&conn, "dragon");
+        let first = add_print(&conn, id, &a_print("failed")).unwrap();
+        add_print(&conn, id, &a_print("success")).unwrap();
+
+        delete_print(&conn, first).unwrap();
+        assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 1);
+        assert_eq!(list_prints(&conn, id).unwrap()[0].outcome,
+                   crate::core::models::PrintOutcome::Success);
+    }
+
+    /// Orphaned history would inflate the printed count forever.
+    #[test]
+    fn deleting_a_model_takes_its_print_history() {
+        let conn = db();
+        let id = model(&conn, "dragon");
+        add_print(&conn, id, &a_print("success")).unwrap();
+        assert_eq!(library_stats(&conn).unwrap().printed, 1);
+
+        delete_model(&conn, id).unwrap();
+        assert_eq!(library_stats(&conn).unwrap().printed, 0);
+        assert_eq!(list_prints(&conn, id).unwrap().len(), 0);
     }
 
     // --------------------------------------------------------- renders ----
@@ -1795,5 +1935,71 @@ pub fn set_model_image(conn: &Connection, model_id: i64, image_id: Option<i64>) 
         "UPDATE models SET image_id = ?2 WHERE id = ?1",
         params![model_id, image_id],
     )?;
+    Ok(())
+}
+
+// ----------------------------------------------------------------- prints ----
+
+pub fn add_print(
+    conn: &Connection,
+    model_id: i64,
+    entry: &crate::core::models::NewPrint,
+) -> std::result::Result<i64, String> {
+    let outcome = crate::core::models::PrintOutcome::parse(&entry.outcome)
+        .ok_or_else(|| "Outcome must be success, partial or failed".to_string())?;
+    // A print with no model is a note about nothing.
+    if get_model(conn, model_id).map_err(|e| e.to_string())?.is_none() {
+        return Err("No such model".into());
+    }
+    conn.execute(
+        "INSERT INTO prints (model_id, printed_at, printer, material, settings, outcome, notes, photo)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            model_id,
+            entry.printed_at.unwrap_or_else(now),
+            entry.printer.trim(),
+            entry.material.trim(),
+            entry.settings.trim(),
+            outcome.as_str(),
+            entry.notes.trim(),
+            entry.photo,
+        ],
+    )
+    .map_err(|e| format!("Could not save print: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_prints(conn: &Connection, model_id: i64) -> Result<Vec<PrintRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, model_id, printed_at, printer, material, settings, outcome, notes, photo
+         FROM prints WHERE model_id = ?1
+         ORDER BY printed_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map(params![model_id], |r| {
+        Ok(PrintRecord {
+            id: r.get(0)?,
+            model_id: r.get(1)?,
+            printed_at: r.get(2)?,
+            printer: r.get(3)?,
+            material: r.get(4)?,
+            settings: r.get(5)?,
+            outcome: crate::core::models::PrintOutcome::parse(&r.get::<_, String>(6)?)
+                .unwrap_or(crate::core::models::PrintOutcome::Success),
+            notes: r.get(7)?,
+            photo: r.get(8)?,
+        })
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+pub fn delete_print(conn: &Connection, print_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM prints WHERE id = ?1", params![print_id])?;
+    Ok(())
+}
+
+/// Deleting a model takes its print history with it -- the history is about
+/// that file, and leaving orphans behind would inflate every count forever.
+pub fn delete_prints_for_model(conn: &Connection, model_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM prints WHERE model_id = ?1", params![model_id])?;
     Ok(())
 }

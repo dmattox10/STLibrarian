@@ -1,7 +1,7 @@
 use crate::core::db;
 use crate::core::models::{
-    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, Package,
-    PackageSuggestion, ScanReport, TagCount,
+    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
+    PackageSuggestion, PrintRecord, ScanReport, TagCount,
 };
 use crate::core::paths;
 use crate::core::scanner;
@@ -147,6 +147,26 @@ fn assign_to_package(package_id: i64, model_ids: Vec<i64>) -> Result<usize, Stri
 fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
     let c = conn()?;
     db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- prints ----
+
+#[command]
+fn prints(model_id: i64) -> Result<Vec<PrintRecord>, String> {
+    let c = conn()?;
+    db::list_prints(&c, model_id).map_err(|e| e.to_string())
+}
+
+#[command]
+fn log_print(model_id: i64, entry: NewPrint) -> Result<i64, String> {
+    let c = conn()?;
+    db::add_print(&c, model_id, &entry)
+}
+
+#[command]
+fn delete_print(print_id: i64) -> Result<(), String> {
+    let c = conn()?;
+    db::delete_print(&c, print_id).map_err(|e| e.to_string())
 }
 
 // --------------------------------------------------------------- renders ----
@@ -351,6 +371,9 @@ pub fn run() {
             duplicates,
             model_renders,
             set_model_render,
+            prints,
+            log_print,
+            delete_print,
             set_provenance,
             creators,
             get_thumb,

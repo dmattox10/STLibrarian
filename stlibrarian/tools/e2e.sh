@@ -317,6 +317,28 @@ check "  preview was rebuilt"       "$([ "$MESH_SIZE" != "$RENDER_SIZE" ] && ech
 # Only a model with no render of its own falls back to the rasteriser.
 check "models without a render still draw" "$(api_code "$BASE/api/thumb/$CUBE_HASH")" 200
 
+echo "== print records =="
+PRINT='{"outcome":"success","printer":"Mars 4 Ultra","material":"grey resin","settings":"0.05mm","notes":"clean"}'
+FAILED='{"outcome":"failed","printer":"Mars 4 Ultra","notes":"peeled off the plate"}'
+check "nothing printed yet"      "$(api "$BASE/api/models/$HERO_ID" | jfield print_count)" 0
+check "logging a print"          "$(post_code "$BASE/api/models/$HERO_ID/prints" "$PRINT")" 200
+check "  counted on the model"   "$(api "$BASE/api/models/$HERO_ID" | jfield print_count)" 1
+check "  history readable"       "$(api "$BASE/api/models/$HERO_ID/prints" | jlen)" 1
+check "  printer kept"           "$(api "$BASE/api/models/$HERO_ID/prints" | jfirst printer)" "Mars 4 Ultra"
+
+check "a failure is still logged" "$(post_code "$BASE/api/models/$HERO_ID/prints" "$FAILED")" 200
+check "  both attempts counted"   "$(api "$BASE/api/models/$HERO_ID" | jfield print_count)" 2
+check "nonsense outcome refused"  "$(post_code "$BASE/api/models/$HERO_ID/prints" '{"outcome":"maybe"}')" 400
+
+check "filter: printed"          "$(api "$BASE/api/models?printed=true" | jlen)" 1
+NEVER="$(api "$BASE/api/models?printed=false" | jlen)"
+check "filter: never printed"    "$([ "$NEVER" -gt 0 ] && echo some || echo none)" "some"
+check "  the two are disjoint"   "$(api "$BASE/api/models?printed=false" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["print_count"]>0))')" 0
+
+PRINT_ID="$(api "$BASE/api/models/$HERO_ID/prints" | jfirst id)"
+check "deleting one attempt"     "$(api_code -X DELETE "$BASE/api/prints/$PRINT_ID")" 204
+check "  the other survives"     "$(api "$BASE/api/models/$HERO_ID" | jfield print_count)" 1
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"
