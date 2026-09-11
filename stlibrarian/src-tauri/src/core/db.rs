@@ -1087,6 +1087,31 @@ mod tests {
     }
 
     #[test]
+    fn an_idea_keeps_its_own_bucket_and_is_never_a_review() {
+        let conn = db();
+        let mut wish = review(Some(5), "It should talk to my slicer.", true);
+        wish.kind = "idea".into();
+        let id = add_feedback(&conn, &wish).unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+
+        // Kept apart from problem reports, because a wish and a fault are not
+        // the same queue -- but still not a testimonial, however it is worded.
+        assert_eq!(list_feedback(&conn, "all").unwrap()[0].kind, "idea");
+        assert!(public_reviews(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unrecognised_kind_is_filed_rather_than_refused() {
+        let conn = db();
+        let mut odd = review(None, "Sent by something that speaks its own dialect.", true);
+        odd.kind = "compliment".into();
+        let id = add_feedback(&conn, &odd).unwrap();
+        assert_eq!(list_feedback(&conn, "all").unwrap()[0].kind, "problem");
+        moderate_feedback(&conn, id, "approved").unwrap();
+        assert!(public_reviews(&conn).unwrap().is_empty());
+    }
+
+    #[test]
     fn a_review_without_a_usable_rating_is_refused() {
         let conn = db();
         assert!(add_feedback(&conn, &review(None, "Some words here.", true)).is_err());
@@ -2779,6 +2804,7 @@ pub fn add_feedback(
 ) -> std::result::Result<i64, String> {
     let kind = match entry.kind.trim() {
         "review" => "review",
+        "idea" => "idea",
         // Anything unrecognised is treated as a problem report rather than
         // refused: a person trying to tell you something should not be told no.
         _ => "problem",

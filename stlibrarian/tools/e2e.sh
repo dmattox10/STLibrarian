@@ -93,6 +93,10 @@ echo "==> starting server on :$PORT"
 export STLIBRARIAN_DATA_DIR="$WORK/data"
 export STLIBRARIAN_BIND="127.0.0.1:$PORT"
 export STLIBRARIAN_WEB_ROOT="$HERE/dist"
+# Every check here arrives from 127.0.0.1, so the whole suite shares one
+# address's hourly allowance. Raised so the feedback checks all fit under it;
+# the wall itself is still asserted below, by running into it on purpose.
+export STLIBRARIAN_FEEDBACK_PER_HOUR=14
 "$HERE/src-tauri/target/debug/stlibrarian-server" > "$WORK/server.log" 2>&1 &
 SRV=$!
 curl -s --retry 30 --retry-delay 1 --retry-connrefused "http://127.0.0.1:$PORT/api/health" >/dev/null
@@ -546,6 +550,19 @@ BUGID="$(api "$BASE/api/feedback?status=all" | python3 -c 'import sys,json;print
 post_code "$BASE/api/feedback/$BUGID/moderate" '{"status":"approved"}' >/dev/null
 check "an approved bug report is not a review" "$(open_get "$BASE/api/reviews" | jlen)" 1
 
+# Wishes get their own bucket -- a wish and a fault are not the same queue --
+# but a wish is still not a testimonial.
+IDEA='{"kind":"idea","rating":5,"body":"It should talk to my slicer directly.","author":"Wisher","may_publish":true}'
+ODD='{"kind":"compliment","body":"Sent by something that speaks its own dialect."}'
+check "an idea is accepted"        "$(open_post "$BASE/api/feedback" "$IDEA")" 200
+check "  and kept as an idea"      "$(api "$BASE/api/feedback?status=all" | python3 -c 'import sys,json;print(sum(1 for f in json.load(sys.stdin) if f["kind"]=="idea"))')" 1
+IDEAID="$(api "$BASE/api/feedback?status=all" | python3 -c 'import sys,json;print(next(f["id"] for f in json.load(sys.stdin) if f["kind"]=="idea"))')"
+post_code "$BASE/api/feedback/$IDEAID/moderate" '{"status":"approved"}' >/dev/null
+check "  an approved idea is not a review" "$(open_get "$BASE/api/reviews" | jlen)" 1
+
+check "an unknown kind is filed, not refused" "$(open_post "$BASE/api/feedback" "$ODD")" 200
+check "  filed as a problem"       "$(api "$BASE/api/feedback?status=pending" | python3 -c 'import sys,json;print(next(f["kind"] for f in json.load(sys.stdin) if f["author"]==""))')" "problem"
+
 check "an invented status is refused" "$(post_code "$BASE/api/feedback/$FID/moderate" '{"status":"featured"}')" 400
 
 # Non-admins have no business in the queue. A fresh plain account, because
@@ -560,7 +577,7 @@ AUTH=("${AUTH_KEEP[@]}")
 
 # Last, because it uses up this address's allowance for the hour.
 LIMITED=no
-for i in 1 2 3 4 5 6 7 8; do
+for i in $(seq 1 20); do
   if [ "$(open_post "$BASE/api/feedback" "$BUG")" = "429" ]; then LIMITED=yes; break; fi
 done
 check "the open endpoint is rate limited" "$LIMITED" "yes"

@@ -37,6 +37,32 @@ export async function send(entry) {
   return res.json().catch(() => ({}));
 }
 
+/** A library this size, with this many prints behind it, is someone using it. */
+export const EARNED_MODELS = 25;
+export const EARNED_PRINTS = 3;
+
+/**
+ * Whether the app has any business asking for a review yet.
+ *
+ * Asking a fresh install is asking someone to rate a room they have not walked
+ * into. The question is only worth putting once there is an answer to give: a
+ * real library, and prints actually logged against it. Both conditions, not
+ * either -- a big import with nothing printed is a folder, not a habit.
+ */
+export function earned(stats) {
+  return (stats?.models ?? 0) >= EARNED_MODELS && (stats?.printed ?? 0) >= EARNED_PRINTS;
+}
+
+/**
+ * What the app is allowed to mark for publication.
+ *
+ * Only a review can ever become a testimonial, and only if its author released
+ * it. A glowing bug report is still a bug report.
+ */
+export function publishable(kind, mayPublish) {
+  return kind === "review" && mayPublish === true;
+}
+
 /** Whether the app has already asked this person for a review. */
 export function asked() {
   try {

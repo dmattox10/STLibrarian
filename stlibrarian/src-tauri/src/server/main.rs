@@ -599,6 +599,20 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
 /// writing carefully and sending twice is never refused.
 const FEEDBACK_PER_HOUR: usize = 6;
 
+/// How many an address may send in an hour. Settable so an operator running
+/// this behind a reverse proxy -- where every submission arrives from one
+/// address -- can raise it rather than have the proxy look like a flood.
+fn feedback_per_hour() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("STLIBRARIAN_FEEDBACK_PER_HOUR")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(FEEDBACK_PER_HOUR)
+    })
+}
+
 struct Limiter {
     seen: std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, (std::time::Instant, usize)>>,
 }
@@ -626,7 +640,7 @@ fn allow(ip: std::net::IpAddr) -> bool {
         *entry = (std::time::Instant::now(), 0);
     }
     entry.1 += 1;
-    entry.1 <= FEEDBACK_PER_HOUR
+    entry.1 <= feedback_per_hour()
 }
 
 /// Open on purpose: this is a copy of the app, run by someone with no account

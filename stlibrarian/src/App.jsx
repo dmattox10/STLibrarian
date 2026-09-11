@@ -5,6 +5,8 @@ import LibraryGrid from "./components/LibraryGrid.jsx";
 import Inspector from "./components/Inspector.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import BulkBar from "./components/BulkBar.jsx";
+import FeedbackDialog from "./components/FeedbackDialog.jsx";
+import ReviewPrompt from "./components/ReviewPrompt.jsx";
 import { useSelection } from "./lib/useSelection.js";
 import { useThumbnails } from "./lib/useThumbnails.js";
 import {
@@ -17,6 +19,7 @@ import {
   Segmented,
 } from "./components/controls/index.jsx";
 import { formatCount } from "./lib/format.js";
+import { asked, earned, markAsked } from "./lib/feedback.js";
 
 const SORTS = [
   { value: "recent", label: "New" },
@@ -64,6 +67,10 @@ export default function App() {
   const [packages, setPackages] = useState([]);
   const [creators, setCreators] = useState([]);
   const [stats, setStats] = useState(EMPTY_STATS);
+  // The review ask: raised at most once, and only once the library has earned
+  // the question. Taking "no thanks" for an answer is the whole point.
+  const [askDismissed, setAskDismissed] = useState(asked);
+  const [feedbackKind, setFeedbackKind] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -348,6 +355,11 @@ export default function App() {
           onRefresh={refresh}
           canScan={isAdmin}
           me={session.user}
+          onFeedback={(kind) => {
+            markAsked();
+            setAskDismissed(true);
+            setFeedbackKind(kind);
+          }}
         />
       </nav>
 
@@ -367,6 +379,20 @@ export default function App() {
             <div style={{ marginBottom: 12 }}>
               <Alert>{error}</Alert>
             </div>
+          ) : null}
+
+          {!askDismissed && earned(stats) ? (
+            <ReviewPrompt
+              onAccept={() => {
+                markAsked();
+                setAskDismissed(true);
+                setFeedbackKind("review");
+              }}
+              onDismiss={() => {
+                markAsked();
+                setAskDismissed(true);
+              }}
+            />
           ) : null}
 
           <LibraryGrid
@@ -435,6 +461,14 @@ export default function App() {
           />
         ) : null}
       </main>
+
+      {feedbackKind ? (
+        <FeedbackDialog
+          api={api}
+          initialKind={feedbackKind}
+          onClose={() => setFeedbackKind(null)}
+        />
+      ) : null}
     </div>
   );
 }
