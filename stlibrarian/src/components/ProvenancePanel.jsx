@@ -56,7 +56,7 @@ export default function ProvenancePanel({ api, model, onChanged }) {
               setSource(e.target.value);
               setSaved(false);
             }}
-            placeholder="Source — a Patreon month, a bundle, a site"
+            placeholder="Source: a Patreon month, a bundle, a site"
             aria-label="Source"
             onKeyDown={(e) => e.key === "Enter" && dirty && save()}
           />

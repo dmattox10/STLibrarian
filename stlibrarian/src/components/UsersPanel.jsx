@@ -74,7 +74,7 @@ export default function UsersPanel({ api, me, onChanged }) {
               <input
                 type="password"
                 value={password}
-                placeholder="Password — at least 8 characters"
+                placeholder="Password, at least 8 characters"
                 onChange={(e) => setPassword(e.target.value)}
                 aria-label="Password"
               />
@@ -102,7 +102,7 @@ export default function UsersPanel({ api, me, onChanged }) {
             <div className="userrow__body">
               <span className="userrow__name">
                 {u.username}
-                {me?.id === u.id ? <span className="dim"> — you</span> : null}
+                {me?.id === u.id ? <span className="dim"> (you)</span> : null}
               </span>
               <button
                 type="button"
@@ -141,7 +141,7 @@ export default function UsersPanel({ api, me, onChanged }) {
               type="button"
               className="collrow__x"
               aria-label={`Remove ${u.username}`}
-              title="Remove — their print history is kept"
+              title="Remove. Their print history is kept."
               onClick={() => setConfirming(u.id)}
             >
               <TrashIcon />
@@ -178,7 +178,7 @@ export default function UsersPanel({ api, me, onChanged }) {
         {confirming != null ? (
           <div className="stack" style={{ gap: 6 }}>
             <span className="dim" style={{ fontSize: 11, lineHeight: 1.5 }}>
-              Remove this person? Their print records stay — a shop&rsquo;s
+              Remove this person? Their print records stay. A shop&rsquo;s
               account of what came off which printer outlives anyone&rsquo;s
               account.
             </span>

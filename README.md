@@ -162,14 +162,71 @@ the old one, so its triangle count and volume describe what is actually there.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --lib                         # everything: 143 tests
-cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
-tools/e2e.sh                                             # server + API: 179 checks
+cd src-tauri && cargo test --features server --lib        # everything: 155 tests
+cd src-tauri && cargo test --no-default-features --lib    # core only, no Tauri
+yarn test                                                 # the client's own gates
+tools/e2e.sh                                              # server + API: 204 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
 scratch data directory, and exercises the API the way a client does. It touches
 nothing you own.
+
+## Reviews and problem reports
+
+The app asks for a review once, and only after the library has earned the
+question: twenty-five models with three prints logged against them. A fresh
+install is never asked, and a big import with nothing printed is a folder, not
+a habit. "No thanks" ends it permanently. **Feedback** in the sidebar is always
+there for anyone who wants to say something unprompted.
+
+Submissions arrive at an open endpoint -- a copy of the app on a bench
+somewhere, with no account anywhere -- so they are treated as hostile. Control
+characters are stripped, paragraphs kept, lengths capped, and an address may
+send six an hour (`STLIBRARIAN_FEEDBACK_PER_HOUR` raises that, which you want
+behind a reverse proxy, where every submission arrives from one address).
+
+Nothing submitted is public. A review reaches `GET /api/reviews` only if **it
+is a review**, **an administrator approved it**, and **its author ticked the
+publish box**. Approving one the author withheld files it as read. A problem
+report is never a testimonial however warmly it is worded, and the public shape
+carries no contact details and no status at all. The moderation queue is under
+**Feedback** in a Pro sidebar, administrators only.
+
+The website reads `/api/reviews` at load and stays hidden when it is empty.
+There is no submission form on the site on purpose -- the app does the asking,
+so a review comes from somebody who actually runs it.
+
+## Releasing
+
+This repository is private, and release assets on a private repo need a token
+to download, which a download button on a website cannot supply. So the source
+stays here and only the built artifacts cross over to a **separate public
+repository** that holds releases and nothing else.
+
+Set up once:
+
+1. Create a public repo, `dmattox10/stlibrarian-releases` (the `RELEASES_REPO`
+   value in the workflow). No source goes in it.
+2. Add a secret `RELEASES_TOKEN` here: a fine-grained personal access token
+   scoped to *that repository only*, Contents: read and write. It cannot read
+   this repository.
+
+Then a release is a tag:
+
+```bash
+# bump the version in package.json, src-tauri/Cargo.toml and tauri.conf.json
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` runs the test suites on every platform, builds
+the desktop bundles for macOS (both architectures), Windows and Linux, builds
+the headless server for x86_64 and arm64, and publishes the lot. A manual run
+(**Run workflow**) builds everything and publishes nothing, so the pipeline can
+be exercised without putting anything in front of anybody.
+
+The server job deliberately installs no GUI packages. If it ever needs them,
+something has leaked from the desktop half into the shared core.
 
 ## How it is put together
 

@@ -87,8 +87,8 @@ export default function MissingPanel({ api, stats, onChanged }) {
         <span className="dim" style={{ fontSize: 11, lineHeight: 1.5 }}>
           <strong style={{ color: "var(--nord13)" }}>{formatCount(missing)}</strong>{" "}
           {missing === 1 ? "model is" : "models are"} not where the library left
-          them. Point it at where they are now and it will match them by content
-          — names and folders can have changed.
+          them. Point it at where they are now and it will match them by
+          content, so names and folders can have changed.
         </span>
 
         <Field icon={<FolderIcon />}>

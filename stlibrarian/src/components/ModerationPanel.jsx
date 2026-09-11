@@ -139,7 +139,7 @@ export default function ModerationPanel({ api }) {
                   Author released this for the site
                 </span>
               ) : (
-                <span className="modrow__flag">Private — not for publication</span>
+                <span className="modrow__flag">Private, not for publication</span>
               )}
             </div>
 

@@ -136,7 +136,7 @@ export default function CollectionsPanel({
                   setRenameDraft(collection.name);
                   setRenaming(collection.id);
                 }}
-                title={`${collection.name} — double-click to rename`}
+                title={`${collection.name} (double-click to rename)`}
               >
                 <span className="collrow__name">
                   {collection.name}

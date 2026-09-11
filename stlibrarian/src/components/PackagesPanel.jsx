@@ -104,7 +104,7 @@ export default function PackagesPanel({
                   setDraft(pkg.name);
                   setRenaming(pkg.id);
                 }}
-                title={`${pkg.name} — double-click to rename`}
+                title={`${pkg.name} (double-click to rename)`}
               >
                 <span className="collrow__name">{pkg.name}</span>
                 <span className="collrow__count num">
@@ -115,7 +115,7 @@ export default function PackagesPanel({
                 type="button"
                 className="collrow__x"
                 aria-label={`Ungroup ${pkg.name}`}
-                title="Ungroup — the files are not touched"
+                title="Ungroup. The files are not touched."
                 onClick={() =>
                   guard(async () => {
                     await api.deletePackage(pkg.id);

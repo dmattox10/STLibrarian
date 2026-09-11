@@ -90,7 +90,7 @@ export default function SlicesPanel({ api, model, onChanged }) {
                 type="button"
                 className="collrow__x"
                 aria-label={`Detach ${s.name}`}
-                title="Detach — the file is not touched"
+                title="Detach. The file is not touched."
                 onClick={() => detach(s.id)}
               >
                 &times;
