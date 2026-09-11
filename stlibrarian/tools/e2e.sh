@@ -504,6 +504,67 @@ check "  and reads back"            "$(api "$BASE/api/models/$PALADIN/prints" | 
 check "detaching leaves the file"   "$(post_code "$BASE/api/slices/$ORPHAN/owner" '{}')" 204
 check "  back to unattached"        "$(api "$BASE/api/slices/unattached" | jlen)" 1
 
+echo "== feedback and reviews =="
+# Deliberately unauthenticated: this is a copy of the app somewhere in the
+# world, run by someone with no account on this server.
+open_post() { curl -s -o /dev/null -w '%{http_code}' -X POST "$1" -H 'Content-Type: application/json' -d "$2"; }
+open_get()  { curl -s "$1"; }
+
+REVIEW='{"kind":"review","rating":5,"body":"Found a model I forgot I owned.","author":"Sam","printer":"Saturn 4","may_publish":true}'
+PRIVATE='{"kind":"review","rating":4,"body":"Good, but keep this one to yourself.","author":"Ali","may_publish":false}'
+BUG='{"kind":"problem","body":"Scanning stalled on a very large file."}'
+
+check "anyone can send a review"   "$(open_post "$BASE/api/feedback" "$REVIEW")" 200
+check "anyone can send a problem"  "$(open_post "$BASE/api/feedback" "$BUG")" 200
+check "a review needs a rating"    "$(open_post "$BASE/api/feedback" '{"kind":"review","body":"No stars given."}')" 400
+check "an empty one is refused"    "$(open_post "$BASE/api/feedback" '{"kind":"review","rating":5,"body":"  "}')" 400
+
+check "reviews are readable by anyone" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/reviews")" 200
+check "  but nothing shows unapproved" "$(open_get "$BASE/api/reviews" | jlen)" 0
+
+check "the queue is admin only"    "$(api_code "$BASE/api/feedback")" 200
+FID="$(api "$BASE/api/feedback" | python3 -c 'import sys,json;print(next(f["id"] for f in json.load(sys.stdin) if f["kind"]=="review"))')"
+check "  and holds both"           "$(api "$BASE/api/feedback" | jlen)" 2
+
+check "approving publishes it"     "$(post_code "$BASE/api/feedback/$FID/moderate" '{"status":"approved"}')" 204
+check "  now on the public list"   "$(open_get "$BASE/api/reviews" | jlen)" 1
+check "  with the author"          "$(open_get "$BASE/api/reviews" | jfirst author)" "Sam"
+check "  and no contact details"   "$(open_get "$BASE/api/reviews" | python3 -c 'import sys,json;print("contact" in json.load(sys.stdin)[0])')" "False"
+
+check "rejecting takes it down"    "$(post_code "$BASE/api/feedback/$FID/moderate" '{"status":"rejected"}')" 204
+check "  gone from the site"       "$(open_get "$BASE/api/reviews" | jlen)" 0
+post_code "$BASE/api/feedback/$FID/moderate" '{"status":"approved"}' >/dev/null
+
+# Approval is not enough: the author has to have released it.
+open_post "$BASE/api/feedback" "$PRIVATE" >/dev/null
+PID2="$(api "$BASE/api/feedback?status=pending" | python3 -c 'import sys,json;print(next(f["id"] for f in json.load(sys.stdin) if f["author"]=="Ali"))')"
+post_code "$BASE/api/feedback/$PID2/moderate" '{"status":"approved"}' >/dev/null
+check "a withheld review stays private" "$(open_get "$BASE/api/reviews" | python3 -c 'import sys,json;print(sum(1 for r in json.load(sys.stdin) if r["author"]=="Ali"))')" 0
+
+# A bug report is not a testimonial, however it is moderated.
+BUGID="$(api "$BASE/api/feedback?status=all" | python3 -c 'import sys,json;print(next(f["id"] for f in json.load(sys.stdin) if f["kind"]=="problem"))')"
+post_code "$BASE/api/feedback/$BUGID/moderate" '{"status":"approved"}' >/dev/null
+check "an approved bug report is not a review" "$(open_get "$BASE/api/reviews" | jlen)" 1
+
+check "an invented status is refused" "$(post_code "$BASE/api/feedback/$FID/moderate" '{"status":"featured"}')" 400
+
+# Non-admins have no business in the queue. A fresh plain account, because
+# sam was promoted during the lockout checks above.
+post "$BASE/api/users" '{"username":"reader","password":"justareaderpw","role":"user"}' >/dev/null
+READER="$(post "$BASE/api/login" '{"username":"reader","password":"justareaderpw"}' | jfield token)"
+AUTH_KEEP=("${AUTH[@]}")
+AUTH=(-H "Authorization: Bearer $READER")
+check "a user cannot see the queue" "$(api_code "$BASE/api/feedback")" 403
+check "  nor moderate"              "$(post_code "$BASE/api/feedback/$FID/moderate" '{"status":"approved"}')" 403
+AUTH=("${AUTH_KEEP[@]}")
+
+# Last, because it uses up this address's allowance for the hour.
+LIMITED=no
+for i in 1 2 3 4 5 6 7 8; do
+  if [ "$(open_post "$BASE/api/feedback" "$BUG")" = "429" ]; then LIMITED=yes; break; fi
+done
+check "the open endpoint is rate limited" "$LIMITED" "yes"
+
 echo "== backup location =="
 LOC="$(api "$BASE/api/library/location")"
 check "reports its database"     "$(printf '%s' "$LOC" | python3 -c 'import sys,json,os;print(os.path.basename(json.load(sys.stdin)["db_path"]))')" "stl.db"

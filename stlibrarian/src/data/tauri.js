@@ -84,6 +84,7 @@ export function createTauriAdapter() {
     logPrint: (modelId, entry) => invoke("log_print", { modelId, entry }),
     deletePrint: (printId) => invoke("delete_print", { printId }),
     bulkRemoveTag: (modelIds, tag) => invoke("bulk_remove_tag", { modelIds, tag }),
+    appInfo: () => invoke("app_info"),
     libraryLocation: () => invoke("library_location"),
     revealDataDir: () => invoke("reveal_data_dir"),
     missingModels: () => invoke("missing_models"),

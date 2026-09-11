@@ -62,6 +62,7 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     setTags: (modelId, tags) => bridge.setTags(modelId, tags),
     deleteModel: (modelId) => bridge.deleteModel(modelId),
     pruneThumbs: () => bridge.pruneThumbs?.() ?? 0,
+    appInfo: () => bridge.appInfo?.() ?? ["", "electron"],
     libraryLocation: () => bridge.libraryLocation(),
     revealDataDir: bridge.revealDataDir ? () => bridge.revealDataDir() : null,
     missingModels: () => bridge.missingModels(),

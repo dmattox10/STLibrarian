@@ -9,7 +9,7 @@
 //! webkit present.
 
 use axum::body::Body;
-use axum::extract::{Path, Query, Request};
+use axum::extract::{ConnectInfo, Path, Query, Request};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -20,7 +20,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
-    LibraryLocation, PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount, User,
+    Feedback, LibraryLocation, NewFeedback, PackageSuggestion, PrintRecord, PublicReview,
+    ScanReport, Slice, TagCount, User,
 };
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
 use stlibrarian_lib::core::{auth, db, organize, paths, relink, scanner, stl, thumbs};
@@ -588,6 +589,120 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
         .map(|changed| Json(Changed { changed }))
 }
 
+// -------------------------------------------------------------- feedback ----
+
+/// How many submissions one address may make per hour.
+///
+/// The endpoint has to be open -- it is a copy of the app somewhere in the
+/// world, with nobody logged in -- so the limit is what stops the moderation
+/// queue being usable as a dumping ground. Generous enough that a person
+/// writing carefully and sending twice is never refused.
+const FEEDBACK_PER_HOUR: usize = 6;
+
+struct Limiter {
+    seen: std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, (std::time::Instant, usize)>>,
+}
+
+fn limiter() -> &'static Limiter {
+    static L: std::sync::OnceLock<Limiter> = std::sync::OnceLock::new();
+    L.get_or_init(|| Limiter {
+        seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+fn allow(ip: std::net::IpAddr) -> bool {
+    let hour = std::time::Duration::from_secs(3600);
+    let mut seen = match limiter().seen.lock() {
+        Ok(s) => s,
+        // A poisoned lock should not take the endpoint down with it.
+        Err(e) => e.into_inner(),
+    };
+    // Cheap sweep so a long-running server does not accumulate an address for
+    // everyone who ever sent anything.
+    seen.retain(|_, (started, _)| started.elapsed() < hour);
+
+    let entry = seen.entry(ip).or_insert((std::time::Instant::now(), 0));
+    if entry.0.elapsed() >= hour {
+        *entry = (std::time::Instant::now(), 0);
+    }
+    entry.1 += 1;
+    entry.1 <= FEEDBACK_PER_HOUR
+}
+
+/// Open on purpose: this is a copy of the app, run by someone with no account
+/// here. Nothing it sends is shown to anybody until a human approves it.
+async fn submit_feedback_route(
+    ConnectInfo(who): ConnectInfo<SocketAddr>,
+    Json(entry): Json<NewFeedback>,
+) -> Result<Json<Created>, ApiError> {
+    if !allow(who.ip()) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "That is a lot of feedback at once. Try again a bit later.".into(),
+        ));
+    }
+    let made = tokio::task::spawn_blocking(move || -> std::result::Result<i64, String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::add_feedback(&conn, &entry)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    made.map(|id| Json(Created { id })).map_err(bad)
+}
+
+/// What the website shows. Approved reviews whose authors released them, and
+/// nothing else -- the returned shape has no contact field to leak.
+async fn public_reviews_route() -> Result<Json<Vec<PublicReview>>, ApiError> {
+    with_db(|conn| db::public_reviews(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+struct StatusQuery {
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ModerateReq {
+    status: String,
+}
+
+async fn feedback_queue_route(
+    Extension(user): Extension<User>,
+    Query(q): Query<StatusQuery>,
+) -> Result<Json<Vec<Feedback>>, ApiError> {
+    require_admin(&user)?;
+    let status = q.status.unwrap_or_else(|| "pending".into());
+    with_db(move |conn| db::list_feedback(conn, &status).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn moderate_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+    Json(req): Json<ModerateReq>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&user)?;
+    let done = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::moderate_feedback(&conn, id, &req.status)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
+async fn delete_feedback_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&user)?;
+    with_db(move |conn| db::delete_feedback(conn, id).map_err(|e| e.to_string())).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // -------------------------------------------------------- lost and found ----
 
 #[derive(Deserialize)]
@@ -974,6 +1089,9 @@ async fn main() {
         .route("/packages/{id}", delete(delete_package_route))
         .route("/packages/{id}/models", post(assign_package_route))
         .route("/duplicates", get(duplicates_route))
+        .route("/feedback", get(feedback_queue_route))
+        .route("/feedback/{id}", delete(delete_feedback_route))
+        .route("/feedback/{id}/moderate", post(moderate_route))
         .route("/library/location", get(location_route))
         .route("/library/missing", get(missing_route))
         .route("/library/relink/plan", post(relink_plan_route))
@@ -1004,7 +1122,11 @@ async fn main() {
     let public = Router::new()
         .route("/login", post(login_route))
         .route("/logout", post(logout_route))
-        .route("/health", get(|| async { "ok" }));
+        .route("/health", get(|| async { "ok" }))
+        // Open: a copy of the app has no account here. Rate limited, and
+        // nothing submitted is visible to anyone until it is approved.
+        .route("/feedback", post(submit_feedback_route))
+        .route("/reviews", get(public_reviews_route));
 
     // Nested so the API keeps its own 404. Without this an unmatched /api path
     // falls through to the SPA and an API client gets HTML under a 200.
@@ -1045,5 +1167,12 @@ async fn main() {
     log::info!("Library at {}", paths::data_dir().display());
     log::info!("Serving web front end from {}", web_root.display());
 
-    axum::serve(listener, app).await.expect("server failed");
+    // with_connect_info so the open feedback endpoint can see who is calling
+    // and rate limit them.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("server failed");
 }

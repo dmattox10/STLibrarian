@@ -62,6 +62,22 @@ fn migrate(conn: &Connection) -> Result<()> {
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS feedback (
+            id           INTEGER PRIMARY KEY,
+            kind         TEXT NOT NULL,
+            rating       INTEGER,
+            body         TEXT NOT NULL,
+            author       TEXT NOT NULL DEFAULT '',
+            printer      TEXT NOT NULL DEFAULT '',
+            app_version  TEXT NOT NULL DEFAULT '',
+            platform     TEXT NOT NULL DEFAULT '',
+            may_publish  INTEGER NOT NULL DEFAULT 0,
+            -- Nothing reaches the public site until this says approved.
+            status       TEXT NOT NULL DEFAULT 'pending',
+            submitted_at INTEGER NOT NULL,
+            moderated_at INTEGER,
+            contact      TEXT NOT NULL DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS slices (
             id              INTEGER PRIMARY KEY,
             path            TEXT UNIQUE NOT NULL,
@@ -200,6 +216,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_slices_model ON slices(model_id);
         CREATE INDEX IF NOT EXISTS idx_slices_package ON slices(package_id);
         CREATE INDEX IF NOT EXISTS idx_slices_dir ON slices(dir);
+        CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback(status);
         ",
     )?;
     Ok(())
@@ -1015,6 +1032,133 @@ mod tests {
         assert!(list_packages(&conn).unwrap().is_empty());
         let still = get_model(&conn, a).unwrap().expect("model survives");
         assert!(still.package_id.is_none());
+    }
+
+    // ------------------------------------------------------- feedback ----
+
+    fn review(rating: Option<i64>, body: &str, publish: bool) -> crate::core::models::NewFeedback {
+        crate::core::models::NewFeedback {
+            kind: "review".into(),
+            rating,
+            body: body.into(),
+            author: "Sam".into(),
+            printer: "Saturn 4".into(),
+            may_publish: publish,
+            ..Default::default()
+        }
+    }
+
+    /// The whole point: a review is not public because it exists, or because
+    /// it is glowing. A person has to approve it *and* the author has to have
+    /// agreed to it being shown.
+    #[test]
+    fn a_review_is_invisible_until_approved_and_permitted() {
+        let conn = db();
+        let id = add_feedback(&conn, &review(Some(5), "Found a model I forgot I owned.", true)).unwrap();
+        assert!(public_reviews(&conn).unwrap().is_empty(), "pending is not public");
+
+        moderate_feedback(&conn, id, "approved").unwrap();
+        assert_eq!(public_reviews(&conn).unwrap().len(), 1);
+
+        moderate_feedback(&conn, id, "rejected").unwrap();
+        assert!(public_reviews(&conn).unwrap().is_empty(), "rejected goes back out of sight");
+    }
+
+    #[test]
+    fn an_approved_review_the_author_did_not_release_stays_private() {
+        let conn = db();
+        let id = add_feedback(&conn, &review(Some(5), "Genuinely good, but keep it to yourself.", false)).unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+        assert!(public_reviews(&conn).unwrap().is_empty());
+        // It is still in the queue for the person running the server.
+        assert_eq!(list_feedback(&conn, "approved").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_problem_report_is_never_a_review() {
+        let conn = db();
+        let mut report = review(None, "Scanning crashed on a 4 GB file.", true);
+        report.kind = "problem".into();
+        let id = add_feedback(&conn, &report).unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+
+        assert!(public_reviews(&conn).unwrap().is_empty(), "a bug report is not a testimonial");
+        assert_eq!(list_feedback(&conn, "all").unwrap()[0].kind, "problem");
+    }
+
+    #[test]
+    fn a_review_without_a_usable_rating_is_refused() {
+        let conn = db();
+        assert!(add_feedback(&conn, &review(None, "Some words here.", true)).is_err());
+        assert!(add_feedback(&conn, &review(Some(0), "Some words here.", true)).is_err());
+        assert!(add_feedback(&conn, &review(Some(9), "Some words here.", true)).is_err());
+        assert!(list_feedback(&conn, "all").unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_empty_submission_is_refused() {
+        let conn = db();
+        assert!(add_feedback(&conn, &review(Some(5), "", true)).is_err());
+        assert!(add_feedback(&conn, &review(Some(5), "   \n  ", true)).is_err());
+    }
+
+    /// It arrives over the network from a stranger, so it is cleaned on the
+    /// way in rather than trusted on the way out.
+    #[test]
+    fn control_characters_are_stripped_but_paragraphs_survive() {
+        let conn = db();
+        let id = add_feedback(
+            &conn,
+            &review(Some(4), "First line.\n\nSecond line.\u{0}\u{7}\u{1b}[31m", true),
+        )
+        .unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+        let body = &public_reviews(&conn).unwrap()[0].body;
+
+        assert!(body.contains("First line.\n\nSecond line."), "got {:?}", body);
+        assert!(!body.contains('\u{0}'));
+        assert!(!body.contains('\u{1b}'), "no escape sequences reach a reader");
+    }
+
+    #[test]
+    fn a_very_long_submission_is_capped_rather_than_refused() {
+        let conn = db();
+        let huge = "word ".repeat(4000);
+        let id = add_feedback(&conn, &review(Some(5), &huge, true)).unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+        assert!(public_reviews(&conn).unwrap()[0].body.len() <= 4000);
+    }
+
+    #[test]
+    fn names_and_printers_cannot_run_away_either() {
+        let conn = db();
+        let mut long = review(Some(5), "Fine tool.", true);
+        long.author = "A".repeat(500);
+        long.printer = "B".repeat(500);
+        let id = add_feedback(&conn, &long).unwrap();
+        moderate_feedback(&conn, id, "approved").unwrap();
+        let r = &public_reviews(&conn).unwrap()[0];
+        assert!(r.author.len() <= 60 && r.printer.len() <= 60);
+    }
+
+    #[test]
+    fn the_queue_counts_what_is_waiting() {
+        let conn = db();
+        let a = add_feedback(&conn, &review(Some(5), "One.", true)).unwrap();
+        add_feedback(&conn, &review(Some(3), "Two.", true)).unwrap();
+        assert_eq!(pending_feedback_count(&conn), 2);
+
+        moderate_feedback(&conn, a, "approved").unwrap();
+        assert_eq!(pending_feedback_count(&conn), 1);
+        assert_eq!(list_feedback(&conn, "pending").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_invented_moderation_status_is_refused() {
+        let conn = db();
+        let id = add_feedback(&conn, &review(Some(5), "Fine tool.", true)).unwrap();
+        assert!(moderate_feedback(&conn, id, "published").is_err());
+        assert!(moderate_feedback(&conn, 9999, "approved").is_err());
     }
 
     // ----------------------------------------------------- multi-user ----
@@ -2606,4 +2750,157 @@ pub fn remeasure_model(conn: &Connection, model_id: i64, new_path: &str) -> std:
     // different key -- but the old picture would linger under the old one.
     crate::core::thumbs::forget(&hash);
     Ok(())
+}
+
+// -------------------------------------------------------------- feedback ----
+
+/// The longest a review may be. Long enough for a considered paragraph, short
+/// enough that nobody can post a novel into the moderation queue.
+const FEEDBACK_MAX: usize = 4000;
+
+/// Strip what has no business in a review, and cap the length.
+///
+/// Control characters are removed rather than escaped: they cannot be
+/// displayed and their only use is confusing whatever reads the text later.
+/// Newlines survive, because people write paragraphs.
+fn tidy_submission(raw: &str, max: usize) -> String {
+    raw.chars()
+        .filter(|c| !c.is_control() || *c == '\n')
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(max)
+        .collect()
+}
+
+pub fn add_feedback(
+    conn: &Connection,
+    entry: &crate::core::models::NewFeedback,
+) -> std::result::Result<i64, String> {
+    let kind = match entry.kind.trim() {
+        "review" => "review",
+        // Anything unrecognised is treated as a problem report rather than
+        // refused: a person trying to tell you something should not be told no.
+        _ => "problem",
+    };
+
+    let body = tidy_submission(&entry.body, FEEDBACK_MAX);
+    if body.len() < 4 {
+        return Err("Please say a little more than that".into());
+    }
+
+    let rating = match (kind, entry.rating) {
+        ("review", Some(r)) if (1..=5).contains(&r) => Some(r),
+        ("review", _) => return Err("A review needs a rating from 1 to 5".into()),
+        _ => None,
+    };
+
+    conn.execute(
+        "INSERT INTO feedback
+            (kind, rating, body, author, printer, app_version, platform,
+             may_publish, status, submitted_at, contact)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10)",
+        params![
+            kind,
+            rating,
+            body,
+            tidy_submission(&entry.author, 60),
+            tidy_submission(&entry.printer, 60),
+            tidy_submission(&entry.app_version, 30),
+            tidy_submission(&entry.platform, 30),
+            entry.may_publish,
+            now(),
+            tidy_submission(&entry.contact, 120),
+        ],
+    )
+    .map_err(|e| format!("Could not save that: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn feedback_from_row(r: &rusqlite::Row) -> Result<crate::core::models::Feedback> {
+    Ok(crate::core::models::Feedback {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        rating: r.get(2)?,
+        body: r.get(3)?,
+        author: r.get(4)?,
+        printer: r.get(5)?,
+        app_version: r.get(6)?,
+        platform: r.get(7)?,
+        may_publish: r.get::<_, i64>(8)? != 0,
+        status: r.get(9)?,
+        submitted_at: r.get(10)?,
+        contact: r.get(11)?,
+    })
+}
+
+const FEEDBACK_COLUMNS: &str = "id, kind, rating, body, author, printer, app_version,
+     platform, may_publish, status, submitted_at, contact";
+
+/// The moderation queue. Administrators only.
+pub fn list_feedback(conn: &Connection, status: &str) -> Result<Vec<crate::core::models::Feedback>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FEEDBACK_COLUMNS} FROM feedback
+         WHERE (?1 = 'all' OR status = ?1)
+         ORDER BY submitted_at DESC
+         LIMIT 500"
+    ))?;
+    let rows = stmt.query_map(params![status], |r| feedback_from_row(r))?;
+    Ok(rows.flatten().collect())
+}
+
+pub fn moderate_feedback(conn: &Connection, id: i64, status: &str) -> std::result::Result<(), String> {
+    if !matches!(status, "approved" | "rejected" | "pending") {
+        return Err("Status must be approved, rejected or pending".into());
+    }
+    let changed = conn
+        .execute(
+            "UPDATE feedback SET status = ?2, moderated_at = ?3 WHERE id = ?1",
+            params![id, status, now()],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("No such submission".into());
+    }
+    Ok(())
+}
+
+pub fn delete_feedback(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM feedback WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// What the public site may show.
+///
+/// Three conditions, all required: it is a review, a human approved it, and
+/// the person who wrote it agreed to it being shown. Contact details are not
+/// in the returned shape at all, so they cannot leak by forgetting to strip
+/// them.
+pub fn public_reviews(conn: &Connection) -> Result<Vec<crate::core::models::PublicReview>> {
+    let mut stmt = conn.prepare(
+        "SELECT rating, body, author, printer, submitted_at FROM feedback
+         WHERE kind = 'review' AND status = 'approved' AND may_publish = 1
+           AND rating IS NOT NULL
+         ORDER BY submitted_at DESC
+         LIMIT 60",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::core::models::PublicReview {
+            rating: r.get(0)?,
+            body: r.get(1)?,
+            author: r.get(2)?,
+            printer: r.get(3)?,
+            published_at: r.get(4)?,
+        })
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+pub fn pending_feedback_count(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM feedback WHERE status = 'pending'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
 }

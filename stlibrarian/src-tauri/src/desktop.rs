@@ -149,6 +149,15 @@ fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
     db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
 }
 
+/// Version and platform, so feedback arrives with enough context to act on.
+#[command]
+fn app_info() -> (String, String) {
+    (
+        env!("CARGO_PKG_VERSION").to_string(),
+        std::env::consts::OS.to_string(),
+    )
+}
+
 // -------------------------------------------------------- lost and found ----
 
 /// Where the library lives, so it can be backed up.
@@ -499,6 +508,7 @@ pub fn run() {
             open_slice,
             open_remote,
             clear_remote_cache,
+            app_info,
             library_location,
             reveal_data_dir,
             missing_models,

@@ -274,3 +274,56 @@ pub struct LibraryLocation {
     /// True when STLIBRARIAN_DATA_DIR is pointing this somewhere chosen.
     pub overridden: bool,
 }
+
+/// Something a person sent back: a review, or a problem report.
+///
+/// Arrives unauthenticated from a copy of the app somewhere in the world, so
+/// every field is treated as hostile until a human has approved it. Nothing
+/// here is ever rendered publicly before that.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Feedback {
+    pub id: i64,
+    pub kind: String,
+    /// 1-5, reviews only.
+    pub rating: Option<i64>,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub app_version: String,
+    pub platform: String,
+    /// The person ticked "you may show this on the site". Without it a review
+    /// is private feedback no matter how good it is.
+    pub may_publish: bool,
+    pub status: String,
+    pub submitted_at: i64,
+    /// Kept for replying, never published.
+    pub contact: String,
+}
+
+/// What a copy of the app sends.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NewFeedback {
+    pub kind: String,
+    pub rating: Option<i64>,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub app_version: String,
+    pub platform: String,
+    pub may_publish: bool,
+    pub contact: String,
+}
+
+/// One approved review, as the public site sees it.
+///
+/// Deliberately a smaller shape than `Feedback`: contact details and status
+/// have no business leaving the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicReview {
+    pub rating: i64,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub published_at: i64,
+}
