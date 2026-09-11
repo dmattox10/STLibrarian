@@ -117,8 +117,21 @@ fn bulk_remove_tag(model_ids: Vec<i64>, tag: String) -> Result<usize, String> {
 }
 
 #[command]
-fn get_thumb(hash: String) -> Option<String> {
-    thumbs::load_data_url(&hash)
+async fn get_thumb(hash: String) -> Option<String> {
+    // Rendered in Rust on first request and cached by content hash. The
+    // webview no longer draws previews at all.
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(cached) = thumbs::load_data_url(&hash) {
+            return Some(cached);
+        }
+        let conn = db::open_default().ok()?;
+        let path = db::path_for_hash(&conn, &hash).ok().flatten()?;
+        thumbs::ensure(&hash, std::path::Path::new(&path)).ok()?;
+        thumbs::load_data_url(&hash)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[command]

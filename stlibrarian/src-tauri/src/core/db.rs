@@ -89,6 +89,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         ("dim_z", "REAL NOT NULL DEFAULT 0"),
         ("mtime", "INTEGER NOT NULL DEFAULT 0"),
         ("has_thumb", "INTEGER NOT NULL DEFAULT 0"),
+        ("volume", "REAL NOT NULL DEFAULT 0"),
     ] {
         if !has_column(conn, "models", column) {
             conn.execute_batch(&format!(
@@ -129,6 +130,7 @@ pub fn upsert_model(
     hash: &str,
     triangles: i64,
     dims: [f64; 3],
+    volume: f64,
     mtime: i64,
 ) -> Result<(i64, Upsert)> {
     let existing: Option<(i64, String, i64)> = conn
@@ -145,24 +147,24 @@ pub fn upsert_model(
         }
         conn.execute(
             "UPDATE models SET name=?2, size=?3, hash=?4, triangles=?5,
-                    dim_x=?6, dim_y=?7, dim_z=?8, mtime=?9
+                    dim_x=?6, dim_y=?7, dim_z=?8, mtime=?9, volume=?10
              WHERE id=?1",
-            params![id, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime],
+            params![id, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume],
         )?;
         return Ok((id, Upsert::Updated));
     }
 
     conn.execute(
-        "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime],
+        "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, volume)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume],
     )?;
     Ok((conn.last_insert_rowid(), Upsert::Added))
 }
 
 pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecord>> {
     let mut sql = String::from(
-        "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb
+        "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb, volume
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -231,6 +233,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             dim_z: row.get(8)?,
             mtime: row.get(9)?,
             has_thumb: row.get::<_, i64>(10)? != 0,
+            volume: row.get(11)?,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -282,7 +285,7 @@ fn attach_tags(conn: &Connection, models: &mut [ModelRecord]) -> Result<()> {
 pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
     let found: Option<ModelRecord> = conn
         .query_row(
-            "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb
+            "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb, volume
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -298,6 +301,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     dim_z: row.get(8)?,
                     mtime: row.get(9)?,
                     has_thumb: row.get::<_, i64>(10)? != 0,
+                    volume: row.get(11)?,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -681,6 +685,7 @@ mod tests {
             &format!("{:x>64}", name),
             42,
             [10.0, 20.0, 30.0],
+            6000.0,
             1000,
         )
         .unwrap()
@@ -923,4 +928,15 @@ mod tests {
         assert_eq!(remove_tag_from_models(&conn, &[a], "never-existed").unwrap(), 0);
         assert_eq!(add_to_collection(&conn, 999, &[]).unwrap(), 0);
     }
+}
+
+/// The file behind a content hash. Thumbnails are addressed by hash, so this
+/// is how a preview request finds something to render.
+pub fn path_for_hash(conn: &Connection, hash: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT path FROM models WHERE hash = ?1 LIMIT 1",
+        params![hash],
+        |r| r.get(0),
+    )
+    .optional()
 }

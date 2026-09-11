@@ -417,10 +417,19 @@ async fn bulk_remove_tag_route(Json(req): Json<BulkTagReq>) -> Result<Json<Chang
 // ------------------------------------------------------------ thumbnails ----
 
 async fn get_thumb_route(Path(hash): Path<String>) -> Result<Response, ApiError> {
-    let bytes = tokio::task::spawn_blocking(move || thumbs::read_png(&hash))
-        .await
-        .map_err(|e| server_error(e.to_string()))?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "No preview".into()))?;
+    // Rendered here if it does not exist yet. The server does not wait for a
+    // browser with WebGL to come along and make one for it.
+    let bytes = with_db(move |conn| {
+        if let Some(cached) = thumbs::read_png(&hash) {
+            return Ok(Some(cached));
+        }
+        match db::path_for_hash(conn, &hash).map_err(|e| e.to_string())? {
+            Some(path) => thumbs::ensure(&hash, std::path::Path::new(&path)).map(Some),
+            None => Ok(None),
+        }
+    })
+    .await?
+    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "No preview".into()))?;
 
     Ok((
         [

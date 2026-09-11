@@ -55,3 +55,25 @@ export function tagColor(name) {
   }
   return `var(${AURORA[hash % AURORA.length]})`;
 }
+
+/** Resin and filament densities, g/cm3. Close enough for a shopping decision. */
+const DENSITY = { resin: 1.1, pla: 1.24 };
+
+export function formatVolume(mm3) {
+  if (!mm3 || mm3 <= 0) return null;
+  const cm3 = mm3 / 1000;
+  return cm3 >= 100 ? `${Math.round(cm3)} cm3` : `${cm3.toFixed(1)} cm3`;
+}
+
+/**
+ * Grams of material for a solid print.
+ *
+ * Deliberately an over-estimate: real prints are hollowed or infilled, so this
+ * is the ceiling rather than a quote. A ceiling is the useful number when you
+ * are deciding whether you have enough resin in the bottle.
+ */
+export function formatWeight(mm3, material = "resin") {
+  if (!mm3 || mm3 <= 0) return null;
+  const grams = (mm3 / 1000) * (DENSITY[material] ?? DENSITY.resin);
+  return grams >= 100 ? `${Math.round(grams)} g` : `${grams.toFixed(1)} g`;
+}

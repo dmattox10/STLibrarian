@@ -44,6 +44,30 @@ pub fn save(hash: &str, data_url: &str) -> Result<(), String> {
     std::fs::write(thumb_path(hash), bytes).map_err(|e| e.to_string())
 }
 
+/// The size previews are rendered at. Large enough for a grid card on a
+/// high-density display, small enough that a thousand of them is not a
+/// problem on disk.
+pub const THUMB_SIZE: u32 = 512;
+
+/// A preview for this model, rendering and caching it if there is not one yet.
+///
+/// This is what lets a headless server build its own previews. Nothing here
+/// needs a GPU, a window, or a client to have visited.
+pub fn ensure(hash: &str, source: &std::path::Path) -> Result<Vec<u8>, String> {
+    if !is_valid_hash(hash) {
+        return Err("Invalid model hash".into());
+    }
+    if let Some(cached) = read_png(hash) {
+        return Ok(cached);
+    }
+    let png = crate::core::raster::render(source, THUMB_SIZE)
+        .map_err(|e| format!("Could not render preview: {}", e))?;
+    std::fs::create_dir_all(thumb_dir()).map_err(|e| e.to_string())?;
+    // Content-addressed, so a written preview can never be stale.
+    std::fs::write(thumb_path(hash), &png).map_err(|e| e.to_string())?;
+    Ok(png)
+}
+
 pub fn read_png(hash: &str) -> Option<Vec<u8>> {
     if !is_valid_hash(hash) {
         return None;

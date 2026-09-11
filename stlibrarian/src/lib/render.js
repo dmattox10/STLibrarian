@@ -1,7 +1,6 @@
 import * as THREE from "three";
 
-/** Triangle budgets. A 320px card cannot show more than the first of these. */
-export const THUMB_MAX_TRIANGLES = 60_000;
+/** Triangle budget for the interactive viewer. Thumbnails are drawn in Rust. */
 export const VIEWER_MAX_TRIANGLES = 250_000;
 
 /**
@@ -108,82 +107,4 @@ export function frameCamera(camera, radius, { azimuth = 0.9, elevation = 0.55, p
   camera.far = distance * 12;
   camera.lookAt(0, 0, 0);
   camera.updateProjectionMatrix();
-}
-
-/* ------------------------------------------------------------ thumbnails -- */
-
-let forge = null;
-
-/**
- * One offscreen renderer, reused for every preview.
- *
- * Browsers cap live WebGL contexts at around sixteen and silently drop the
- * oldest past that. Making a renderer per thumbnail would kill the interactive
- * viewer partway through a library scan.
- */
-function getForge(size) {
-  if (forge && forge.size === size) return forge;
-  if (forge) {
-    forge.renderer.dispose();
-    forge = null;
-  }
-  try {
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      // Required for toDataURL to see anything on most drivers.
-      preserveDrawingBuffer: true,
-    });
-    renderer.setSize(size, size, false);
-    renderer.setPixelRatio(1);
-
-    const scene = new THREE.Scene();
-    lightScene(scene);
-    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000);
-    forge = { renderer, scene, camera, size };
-    return forge;
-  } catch {
-    // No WebGL (software rendering disabled, headless, a locked-down browser).
-    // Previews are a nicety; the library still works without them.
-    return null;
-  }
-}
-
-/**
- * Render STL bytes to a PNG data URL, or null if the GPU is unavailable.
- */
-export function renderThumbnail(buffer, size = 512) {
-  const f = getForge(size);
-  if (!f) return null;
-
-  let geometry;
-  let mesh;
-  try {
-    geometry = geometryFromPositions(buffer);
-    if (!geometry.boundingSphere || geometry.boundingSphere.radius === 0) return null;
-
-    const material = makeMaterial();
-    mesh = new THREE.Mesh(geometry, material);
-    f.scene.add(mesh);
-    frameCamera(f.camera, geometry.boundingSphere.radius, { pad: 1.2 });
-    f.renderer.render(f.scene, f.camera);
-    return f.renderer.domElement.toDataURL("image/png");
-  } catch {
-    return null;
-  } finally {
-    // Geometry and materials are not garbage collected -- a scan of ten
-    // thousand models would leak every one of them onto the GPU.
-    if (mesh) {
-      f.scene.remove(mesh);
-      mesh.material.dispose();
-    }
-    if (geometry) geometry.dispose();
-  }
-}
-
-export function disposeForge() {
-  if (forge) {
-    forge.renderer.dispose();
-    forge = null;
-  }
 }

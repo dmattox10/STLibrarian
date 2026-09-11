@@ -16,6 +16,8 @@ pub struct ModelRecord {
     pub dim_y: f64,
     pub dim_z: f64,
     pub has_thumb: bool,
+    /// Enclosed volume in cubic millimetres; 0 when the mesh is not closed.
+    pub volume: f64,
     pub mtime: i64,
     pub tags: Vec<String>,
     /// Names of the collections holding this model. Denormalised onto the row

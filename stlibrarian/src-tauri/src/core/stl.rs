@@ -12,6 +12,13 @@ pub struct StlMeta {
     pub triangles: u32,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// Enclosed volume in the STL's own cubic units -- cubic millimetres by
+    /// near-universal convention in printing. Multiply by a resin or filament
+    /// density and you have grams, which is what a print actually costs.
+    ///
+    /// Only meaningful for a closed mesh. An open shell still yields a number,
+    /// it just is not the volume of anything.
+    pub volume: f32,
 }
 
 impl StlMeta {
@@ -20,6 +27,7 @@ impl StlMeta {
             triangles: 0,
             min: [0.0; 3],
             max: [0.0; 3],
+            volume: 0.0,
         }
     }
 
@@ -32,112 +40,52 @@ impl StlMeta {
     }
 }
 
-/// Read triangle count and bounding box, streaming.
+/// Bounding box, triangle count and volume, in one streaming pass.
 ///
 /// Never loads the whole file. A 500 MB STL is ordinary in this hobby and the
-/// old scanner did `fs::read` on every one of them.
+/// original scanner called `fs::read` on every one of them.
 pub fn read_meta(path: &Path) -> std::io::Result<StlMeta> {
-    let file = File::open(path)?;
-    let len = file.metadata()?.len();
-
-    // A binary STL is exactly 84 + 50n bytes: 80 header, 4 count, 50 per
-    // triangle. Checking the arithmetic is the only reliable test -- plenty of
-    // binary STLs start with the ASCII word "solid", so sniffing the first
-    // bytes gets it wrong on real files.
-    if len >= 84 {
-        let mut reader = BufReader::new(file);
-        let mut header = [0u8; 84];
-        reader.read_exact(&mut header)?;
-        let count = u32::from_le_bytes([header[80], header[81], header[82], header[83]]);
-        if 84u64 + 50u64 * u64::from(count) == len {
-            return read_binary(reader, count);
-        }
-    }
-    read_ascii(path)
-}
-
-fn read_binary<R: Read>(mut reader: R, count: u32) -> std::io::Result<StlMeta> {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    let mut tri = [0u8; 50];
-    let mut seen = 0u32;
+    let mut triangles = 0u32;
+    let mut six_volume = 0f64;
 
-    for _ in 0..count {
-        // A truncated file stops the walk instead of failing the whole scan --
-        // a half-copied download should still show up in the library.
-        if reader.read_exact(&mut tri).is_err() {
-            break;
-        }
-        seen += 1;
-        // Bytes 0..12 are the facet normal; the three vertices follow.
-        for v in 0..3 {
+    for_each_triangle(path, |tri| {
+        triangles += 1;
+        for v in &tri {
             for axis in 0..3 {
-                let o = 12 + v * 12 + axis * 4;
-                let f = f32::from_le_bytes([tri[o], tri[o + 1], tri[o + 2], tri[o + 3]]);
-                if f.is_finite() {
-                    if f < min[axis] {
-                        min[axis] = f;
+                if v[axis].is_finite() {
+                    if v[axis] < min[axis] {
+                        min[axis] = v[axis];
                     }
-                    if f > max[axis] {
-                        max[axis] = f;
+                    if v[axis] > max[axis] {
+                        max[axis] = v[axis];
                     }
                 }
             }
         }
-    }
-    Ok(finish(seen, min, max))
-}
+        // Signed volume of the tetrahedron from the origin to this facet. Over
+        // a closed mesh the outside contributions cancel and what remains is
+        // six times the enclosed volume, wherever the origin happens to sit.
+        // Accumulated in f64 because three million f32 additions drift.
+        let (a, b, c) = (tri[0], tri[1], tri[2]);
+        six_volume += f64::from(a[0])
+            * (f64::from(b[1]) * f64::from(c[2]) - f64::from(b[2]) * f64::from(c[1]))
+            - f64::from(a[1])
+                * (f64::from(b[0]) * f64::from(c[2]) - f64::from(b[2]) * f64::from(c[0]))
+            + f64::from(a[2])
+                * (f64::from(b[0]) * f64::from(c[1]) - f64::from(b[1]) * f64::from(c[0]));
+    })?;
 
-fn read_ascii(path: &Path) -> std::io::Result<StlMeta> {
-    let reader = BufReader::new(File::open(path)?);
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    let mut vertices = 0u64;
-
-    for line in reader.lines() {
-        // Non-UTF-8 means this was not ASCII after all; stop rather than error.
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        let trimmed = line.trim_start();
-        if !trimmed.starts_with("vertex") {
-            continue;
-        }
-        let mut parts = trimmed.split_whitespace();
-        parts.next();
-        let mut xyz = [0f32; 3];
-        let mut ok = true;
-        for axis in 0..3 {
-            match parts.next().and_then(|s| s.parse::<f32>().ok()) {
-                Some(v) if v.is_finite() => xyz[axis] = v,
-                _ => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if !ok {
-            continue;
-        }
-        vertices += 1;
-        for axis in 0..3 {
-            if xyz[axis] < min[axis] {
-                min[axis] = xyz[axis];
-            }
-            if xyz[axis] > max[axis] {
-                max[axis] = xyz[axis];
-            }
-        }
-    }
-    Ok(finish((vertices / 3) as u32, min, max))
-}
-
-fn finish(triangles: u32, min: [f32; 3], max: [f32; 3]) -> StlMeta {
     if triangles == 0 || !min[0].is_finite() {
-        return StlMeta::empty();
+        return Ok(StlMeta::empty());
     }
-    StlMeta { triangles, min, max }
+    Ok(StlMeta {
+        triangles,
+        min,
+        max,
+        volume: (six_volume / 6.0).abs() as f32,
+    })
 }
 
 pub struct PreviewMesh {
@@ -287,7 +235,7 @@ fn cluster(path: &Path, meta: StlMeta, max: u32) -> std::io::Result<PreviewMesh>
 }
 
 /// Stream triangles out of either STL flavour, one callback per facet.
-fn for_each_triangle<F: FnMut([[f32; 3]; 3])>(path: &Path, mut f: F) -> std::io::Result<()> {
+pub(crate) fn for_each_triangle<F: FnMut([[f32; 3]; 3])>(path: &Path, mut f: F) -> std::io::Result<()> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
 
@@ -461,6 +409,65 @@ endsolid cube
     }
 
     // ------------------------------------------------------- preview ----
+
+    /// A closed box of side s encloses exactly s cubed.
+    fn cube(origin: [f32; 3], side: f32) -> Vec<[[f32; 3]; 3]> {
+        let o = origin;
+        let s = side;
+        let p = [
+            [o[0], o[1], o[2]],
+            [o[0] + s, o[1], o[2]],
+            [o[0] + s, o[1] + s, o[2]],
+            [o[0], o[1] + s, o[2]],
+            [o[0], o[1], o[2] + s],
+            [o[0] + s, o[1], o[2] + s],
+            [o[0] + s, o[1] + s, o[2] + s],
+            [o[0], o[1] + s, o[2] + s],
+        ];
+        let faces = [
+            (0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6),
+            (0, 5, 1), (0, 4, 5), (1, 6, 2), (1, 5, 6),
+            (2, 7, 3), (2, 6, 7), (3, 4, 0), (3, 7, 4),
+        ];
+        faces.iter().map(|&(a, b, c)| [p[a], p[b], p[c]]).collect()
+    }
+
+    #[test]
+    fn volume_of_a_cube_is_its_side_cubed() {
+        let p = tmp("vol_cube.stl", &binary_stl(&cube([0.0, 0.0, 0.0], 20.0)));
+        let meta = read_meta(&p).unwrap();
+        assert!(
+            (meta.volume - 8000.0).abs() < 1.0,
+            "expected 8000 mm3, got {}",
+            meta.volume
+        );
+        std::fs::remove_file(p).ok();
+    }
+
+    /// The tetrahedron sum is taken from the origin, so a model sitting far
+    /// from it must still report the same volume -- otherwise every part whose
+    /// author did not centre it would be priced wrongly.
+    #[test]
+    fn volume_does_not_depend_on_where_the_model_sits() {
+        let here = tmp("vol_here.stl", &binary_stl(&cube([0.0, 0.0, 0.0], 10.0)));
+        let far = tmp("vol_far.stl", &binary_stl(&cube([500.0, -300.0, 120.0], 10.0)));
+        let a = read_meta(&here).unwrap().volume;
+        let b = read_meta(&far).unwrap().volume;
+        assert!((a - 1000.0).abs() < 0.5, "got {}", a);
+        assert!((a - b).abs() < 0.5, "{} vs {}", a, b);
+        std::fs::remove_file(here).ok();
+        std::fs::remove_file(far).ok();
+    }
+
+    #[test]
+    fn volume_scales_with_the_cube_of_size() {
+        let small = tmp("vol_s.stl", &binary_stl(&cube([0.0, 0.0, 0.0], 10.0)));
+        let big = tmp("vol_b.stl", &binary_stl(&cube([0.0, 0.0, 0.0], 20.0)));
+        let ratio = read_meta(&big).unwrap().volume / read_meta(&small).unwrap().volume;
+        assert!((ratio - 8.0).abs() < 0.05, "doubling side should be 8x: {}", ratio);
+        std::fs::remove_file(small).ok();
+        std::fs::remove_file(big).ok();
+    }
 
     #[test]
     fn a_small_mesh_is_returned_whole() {

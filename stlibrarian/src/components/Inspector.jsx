@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import StlViewer from "./StlViewer.jsx";
 import { Alert, Button, CloseIcon, Field, Panel, TagChip, TrashIcon } from "./controls/index.jsx";
-import { fitsBed, formatBytes, formatCount, formatDate, formatDims } from "../lib/format.js";
+import {
+  fitsBed,
+  formatBytes,
+  formatCount,
+  formatDate,
+  formatDims,
+  formatVolume,
+  formatWeight,
+} from "../lib/format.js";
 
 function TagEditor({ model, api, onChanged }) {
   const [draft, setDraft] = useState("");
@@ -134,6 +142,14 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
           <dd>{formatCount(model.triangles)}</dd>
           <dt>Bounds</dt>
           <dd>{formatDims(model)}</dd>
+          {formatVolume(model.volume) ? (
+            <>
+              <dt>Volume</dt>
+              <dd>{formatVolume(model.volume)}</dd>
+              <dt>Resin</dt>
+              <dd title="Solid, so an upper bound">&asymp; {formatWeight(model.volume)}</dd>
+            </>
+          ) : null}
           {bed !== null ? (
             <>
               <dt>220 bed</dt>

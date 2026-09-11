@@ -59,6 +59,9 @@ argon2 = "0.5"
 # `OsRng` is compiled out and salts have no entropy source.
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64 = "0.22"
+# Thumbnails are rasterised in Rust so a headless NAS can build them without a
+# browser, a GPU, or anyone opening the web UI.
+png = "0.17"
 
 # --- desktop only ---
 tauri = { version = "2", features = [], optional = true }

@@ -101,6 +101,7 @@ fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
         &hash,
         i64::from(geometry.triangles),
         [dims[0] as f64, dims[1] as f64, dims[2] as f64],
+        f64::from(geometry.volume),
         mtime,
     )
     .map_err(|e| e.to_string())?;

@@ -139,8 +139,10 @@ export function createHttpAdapter(baseUrl = "") {
 
     // The server sets a long immutable cache header, and the URL is keyed by
     // content hash, so the browser only ever fetches each preview once.
-    async getThumbUrl(hash, model) {
-      return model?.has_thumb ? `${baseUrl}/api/thumb/${hash}` : null;
+    async getThumbUrl(hash) {
+      // Always a URL: the server rasterises on first request and caches by
+      // content hash, so there is nothing to wait for it to have already done.
+      return `${baseUrl}/api/thumb/${hash}`;
     },
     putThumb: (hash, dataUrl) =>
       request(`/api/thumb/${hash}`, { method: "PUT", body: { data_url: dataUrl } }),

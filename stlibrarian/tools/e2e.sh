@@ -189,6 +189,37 @@ echo "== rescan =="
 check "idempotent"              "$(post "$BASE/api/scan" "$SCAN_BODY" | jfield unchanged)" 2
 check "user tags survive"       "$(api "$BASE/api/models/$ID" | jjoin tags)" "dragons"
 
+
+# Deliberately last: this adds a third model, and every count assertion above
+# is written against the two fixtures.
+echo "== volume =="
+# The fixtures are open shells, so build a closed cube to measure.
+python3 - "$WORK/models/cube.stl" <<'PYCUBE'
+import struct, sys, pathlib
+s = 10.0
+p = [[0,0,0],[s,0,0],[s,s,0],[0,s,0],[0,0,s],[s,0,s],[s,s,s],[0,s,s]]
+faces = [(0,1,2),(0,2,3),(4,6,5),(4,7,6),(0,5,1),(0,4,5),
+         (1,6,2),(1,5,6),(2,7,3),(2,6,7),(3,4,0),(3,7,4)]
+out = bytearray(b"\0"*80) + struct.pack("<I", len(faces))
+for a,b,c in faces:
+    out += b"\0"*12
+    for v in (p[a],p[b],p[c]): out += struct.pack("<3f", *v)
+    out += b"\0\0"
+pathlib.Path(sys.argv[1]).write_bytes(bytes(out))
+PYCUBE
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+CUBE_ID="$(api "$BASE/api/models?search=cube" | jfirst id)"
+check "10mm cube is 1000 mm3" "$(api "$BASE/api/models/$CUBE_ID" | python3 -c 'import sys,json;print(round(json.load(sys.stdin)["volume"]))')" 1000
+
+echo "== server-side rendering =="
+# No PUT first: the server has to rasterise this itself, which is the whole
+# point -- a headless NAS has no browser to make previews for it.
+CUBE_HASH="$(api "$BASE/api/models?search=cube" | jfirst hash)"
+check "rendered on demand"      "$(api_code "$BASE/api/thumb/$CUBE_HASH")" 200
+check "  is a PNG"              "$(api "$BASE/api/thumb/$CUBE_HASH" | head -c 4 | tail -c 3)" "PNG"
+check "  cached to disk"        "$(ls "$WORK/data/thumbnails" | grep -c "$CUBE_HASH")" 1
+
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"
