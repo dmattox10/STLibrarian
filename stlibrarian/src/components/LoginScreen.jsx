@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { Alert, Button, CubeIcon, Field } from "./controls/index.jsx";
+import { isDesktop, readRemote, writeRemote } from "../data/adapter.js";
 
 export default function LoginScreen({ api, onSignedIn }) {
+  // A desktop client pointed at a server it cannot reach would otherwise be
+  // stuck here forever: the control that switches libraries lives in the rail,
+  // and the rail is not rendered until you are signed in.
+  const remote = isDesktop() ? readRemote() : null;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,7 +40,13 @@ export default function LoginScreen({ api, onSignedIn }) {
           </div>
 
           <p className="dim" style={{ margin: 0, fontSize: 12, lineHeight: 1.6 }}>
-            Sign in to this library server.
+            {remote ? (
+              <>
+                Sign in to <strong style={{ color: "var(--nord8)" }}>{remote}</strong>.
+              </>
+            ) : (
+              "Sign in to this library server."
+            )}
           </p>
 
           <Field>
@@ -74,6 +85,20 @@ export default function LoginScreen({ api, onSignedIn }) {
             First run? The server printed a generated admin password to its
             console on startup.
           </p>
+
+          {remote ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                writeRemote(null);
+                window.location.reload();
+              }}
+            >
+              Use this computer instead
+            </Button>
+          ) : null}
         </div>
       </form>
     </div>

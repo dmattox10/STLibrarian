@@ -172,6 +172,11 @@ body {
 .rail {
   grid-area: rail;
   overflow-y: auto;
+  /* Load-bearing. Setting only overflow-y makes the browser compute
+     overflow-x as `auto` rather than leaving it visible, so one long creator
+     name or server URL lets the whole rail slide sideways and clips the first
+     character off every label. */
+  overflow-x: hidden;
   padding: 14px;
   border-right: 1px solid var(--sub1);
   background: linear-gradient(180deg, rgba(59, 66, 82, 0.55), rgba(46, 52, 64, 0.2));
@@ -190,12 +195,14 @@ body {
 
 .stage {
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   min-width: 0;
 }
 
 .inspector {
   width: var(--inspector);
+  overflow-x: hidden;
   border-left: 1px solid var(--sub1);
   background: linear-gradient(180deg, rgba(59, 66, 82, 0.6), rgba(46, 52, 64, 0.25));
   overflow-y: auto;

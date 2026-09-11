@@ -1358,3 +1358,31 @@
   font-size: 9px;
   vertical-align: 2px;
 }
+
+/* Panels hold paths, URLs and creator names of arbitrary length. None of them
+   may widen the column they sit in. */
+.gc-panel,
+.gc-panel__body {
+  min-width: 0;
+}
+
+.gc-panel__body {
+  overflow-wrap: anywhere;
+}
+
+.gc-panel__head {
+  min-width: 0;
+}
+
+.gc-panel__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chips wrap as a group; a single very long tag truncates rather than
+   stretching the rail. */
+.gc-chip {
+  min-width: 0;
+}
