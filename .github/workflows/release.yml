@@ -1,0 +1,252 @@
+# Builds every desktop bundle and the headless server binary, then publishes
+# them to a SEPARATE PUBLIC repository.
+#
+# Why the second repository: this one is private, and release assets on a
+# private repo need a token to download -- a download button on a website
+# cannot supply one. So the source stays here and only the built artifacts
+# cross over, where anybody can fetch them without an account.
+#
+# What has to exist before this works:
+#   1. A public repo, by default dmattox10/stlibrarian-releases, with no
+#      source in it. It only ever holds releases.
+#   2. A secret RELEASES_TOKEN on THIS repo: a fine-grained personal access
+#      token scoped to that one repository, with Contents: read and write.
+#      Nothing else. It cannot read this repository's source.
+#
+# To cut a release: bump the version in three places (package.json,
+# src-tauri/Cargo.toml, src-tauri/tauri.conf.json), commit, then
+#   git tag v0.2.0 && git push origin v0.2.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Buildable on demand without tagging, to check the pipeline still works.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only; publish nothing"
+        type: boolean
+        default: true
+
+env:
+  RELEASES_REPO: dmattox10/stlibrarian-releases
+
+jobs:
+  desktop:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the others build.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS (Apple silicon)
+            target: aarch64-apple-darwin
+          - os: macos-13
+            label: macOS (Intel)
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            label: Linux
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            label: Windows
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri 2 on Linux wants webkit2gtk 4.1. 22.04 is the oldest runner that
+      # has it, and building on the oldest available glibc is what keeps the
+      # AppImage runnable on anything newer.
+      - name: Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            build-essential curl wget file libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: stlibrarian/yarn.lock
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: stlibrarian/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: stlibrarian
+        run: yarn install --frozen-lockfile
+
+      # The suites that do not need a display run on every platform, because a
+      # release that fails its own tests should never reach a download button.
+      - name: Unit tests
+        working-directory: stlibrarian/src-tauri
+        run: cargo test --features server
+
+      - name: Frontend tests
+        working-directory: stlibrarian
+        run: yarn test
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: stlibrarian
+          args: --target ${{ matrix.target }}
+          # No release is created here. The bundles are collected and published
+          # to the public repository by the job below.
+          includeRelease: false
+          includeDebug: false
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p out
+          BUNDLE="stlibrarian/src-tauri/target/${{ matrix.target }}/release/bundle"
+          # -print0/-d '' so a path with a space in it survives the loop.
+          find "$BUNDLE" -type f \
+            \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
+               -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' \) \
+            -print0 2>/dev/null | while IFS= read -r -d '' f; do
+              cp "$f" out/
+            done
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  # The NAS build. No GTK, no webkit, no display -- that is the whole point of
+  # the feature split, and building it here proves the split still holds.
+  server:
+    name: Server (${{ matrix.arch }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: stlibrarian/src-tauri -> target
+          key: server-${{ matrix.target }}
+
+      # Deliberately no GUI packages installed. If this job ever needs them,
+      # something has leaked from the desktop half into the shared core.
+      - name: Cross compiler for arm64
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: stlibrarian/yarn.lock
+
+      # The server serves the same built frontend the desktop app uses.
+      - name: Build the web client
+        working-directory: stlibrarian
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+
+      - name: Build the server
+        working-directory: stlibrarian/src-tauri
+        run: |
+          cargo build --release --locked \
+            --target ${{ matrix.target }} \
+            --no-default-features --features server \
+            --bin stlibrarian-server
+
+      - name: Package
+        working-directory: stlibrarian
+        run: |
+          STAGE="stlibrarian-server-${{ matrix.arch }}"
+          mkdir -p "out/$STAGE"
+          cp "src-tauri/target/${{ matrix.target }}/release/stlibrarian-server" "out/$STAGE/"
+          cp -r dist "out/$STAGE/web"
+          cd out && tar czf "$STAGE.tar.gz" "$STAGE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.arch }}
+          path: stlibrarian/out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish to the public releases repo
+    needs: [desktop, server]
+    runs-on: ubuntu-latest
+    # Only a tag publishes. A manual run builds and stops, so the pipeline can
+    # be exercised without putting anything in front of anybody.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+
+      - name: Flatten
+        run: |
+          mkdir -p assets
+          find incoming -type f -print0 | while IFS= read -r -d '' f; do
+            cp "$f" assets/
+          done
+          ls -la assets
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "RELEASES_TOKEN is not set -- see the comment at the top of this file." >&2
+            exit 1
+          fi
+          # The public repo has no source and therefore no matching commit, so
+          # the release is cut against its default branch and carries only the
+          # tag name.
+          cat > notes.md <<'NOTES'
+          Desktop builds for macOS, Windows and Linux, and the headless server for a NAS.
+
+          Source lives in a private repository; these are the builds it produces.
+          NOTES
+          # The heredoc above is indented to stay inside this block, so strip it.
+          sed -i 's/^          //' notes.md
+
+          # The public repo has no source and therefore no matching commit, so
+          # the release is cut against its default branch and carries only the
+          # tag name. A re-run of the same tag updates the assets in place.
+          gh release create "$TAG" \
+            --repo "$RELEASES_REPO" \
+            --title "STLibrarian $TAG" \
+            --notes-file notes.md \
+            assets/* \
+          || gh release upload "$TAG" --repo "$RELEASES_REPO" --clobber assets/*

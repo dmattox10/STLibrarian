@@ -1,13 +1,329 @@
-// ================================
-// core/models.rs
-// ================================
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+/// `Default` is derived so tests can state only the fields under test. Without
+/// it every new column breaks every hand-built fixture, which is how fields
+/// end up being added without anyone checking what they mean.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelRecord {
     pub id: i64,
     pub path: String,
+    /// File stem, kept denormalised so the grid can sort and search without
+    /// splitting paths on every render.
+    pub name: String,
     pub size: i64,
     pub hash: String,
+    pub triangles: i64,
+    /// Bounding box in the STL's own units (millimetres, by near-universal
+    /// convention in this hobby).
+    pub dim_x: f64,
+    pub dim_y: f64,
+    pub dim_z: f64,
+    pub has_thumb: bool,
+    /// Enclosed volume in cubic millimetres; 0 when the mesh is not closed.
+    pub volume: f64,
+    /// Guessed from the path when scanned, and editable. Empty means unknown.
+    pub creator: String,
+    pub source: String,
+    /// Set only when someone groups files together; scanning never assumes it.
+    pub package_id: Option<i64>,
+    /// A creator's render sitting beside the file, used as the preview when
+    /// present. None means the preview is drawn from the mesh.
+    pub render: Option<String>,
+    /// How many times this has been printed, and when last. The print
+    /// equivalent of Plex's watched marker -- the single most useful thing to
+    /// know when looking at a wall of models you half remember.
+    pub print_count: i64,
+    pub last_printed: Option<i64>,
+    /// How many sliced files are attached -- the printable outputs of this
+    /// model. Zero means it has never been through a slicer.
+    pub slice_count: i64,
+    /// Every edge shared by exactly two triangles. When false, `volume` is
+    /// not the volume of anything and the file may not slice.
+    pub watertight: bool,
+    /// "supported", "unsupported", or empty when the path says nothing.
+    /// Creators ship both, and which one you are looking at matters.
+    pub variant: String,
+    pub mtime: i64,
     pub tags: Vec<String>,
+    /// Names of the collections holding this model. Denormalised onto the row
+    /// so the inspector can show membership without a second round trip.
+    pub collections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagCount {
+    pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub role: String,
+}
+
+impl User {
+    pub fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+}
+
+/// Everything the library grid can ask for. All fields optional so a bare
+/// `{}` means "the whole library, newest first".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryQuery {
+    pub search: Option<String>,
+    /// A model must carry *every* tag listed here, not any of them. Narrowing
+    /// is what a filter is for.
+    pub tags: Vec<String>,
+    /// Restrict to one collection. Combines with search and tags rather than
+    /// replacing them, so you can search inside a collection.
+    pub collection: Option<i64>,
+    /// Some(true) for models you have printed, Some(false) for ones you never
+    /// have. "What have I never actually made?" is the question a pile of
+    /// downloads cannot answer and a library can.
+    pub printed: Option<bool>,
+    pub variant: Option<String>,
+    pub creator: Option<String>,
+    pub package: Option<i64>,
+    pub sort: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScanReport {
+    pub added: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+    pub failed: usize,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LibraryStats {
+    pub models: i64,
+    pub total_bytes: i64,
+    pub tags: i64,
+    pub missing: i64,
+    pub without_thumb: i64,
+    /// Models printed at least once.
+    pub printed: i64,
+}
+
+/// A curated, named set of models.
+///
+/// Distinct from a tag on purpose: a tag describes a property every member
+/// happens to share, a collection is simply the set of things you put in it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub count: i64,
+    /// None means shared with everyone on the server.
+    pub owner_id: Option<i64>,
+}
+
+/// How many rows a bulk operation actually changed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BulkResult {
+    pub changed: usize,
+}
+
+/// A group of files that are one model -- body, arms, wings, supported and
+/// unsupported versions.
+///
+/// Membership is always a decision, never an inference. Scanning proposes
+/// groupings; it does not apply them, because a folder full of STLs is just as
+/// often a folder full of unrelated models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Package {
+    pub id: i64,
+    pub name: String,
+    pub root: String,
+    pub parts: i64,
+    pub total_bytes: i64,
+}
+
+/// A grouping the scanner thinks is probably one model, offered for approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageSuggestion {
+    pub name: String,
+    pub root: String,
+    pub model_ids: Vec<i64>,
+    pub parts: i64,
+}
+
+/// Files that are byte-for-byte the same model stored more than once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub name: String,
+    pub copies: i64,
+    /// Bytes that would come back by keeping one copy.
+    pub wasted_bytes: i64,
+    pub models: Vec<ModelRecord>,
+}
+
+/// One time you actually printed something.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrintRecord {
+    pub id: i64,
+    pub model_id: i64,
+    pub printed_at: i64,
+    pub printer: String,
+    pub material: String,
+    /// Free text on purpose: layer height, exposure, supports, whatever you
+    /// would have written on a sticky note. A schema here would be wrong for
+    /// every printer but the one it was designed against.
+    pub settings: String,
+    pub outcome: PrintOutcome,
+    pub notes: String,
+    /// A photo of the result, if you took one.
+    pub photo: Option<String>,
+    /// The sliced file that was actually run. This is what makes "print it
+    /// again exactly as it went last time" a thing you can do rather than
+    /// something you have to remember.
+    pub slice_id: Option<i64>,
+    /// Who ran it. Empty when that account has since been removed.
+    pub by: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrintOutcome {
+    Success,
+    Partial,
+    Failed,
+}
+
+impl PrintOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrintOutcome::Success => "success",
+            PrintOutcome::Partial => "partial",
+            PrintOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "success" => Some(PrintOutcome::Success),
+            "partial" => Some(PrintOutcome::Partial),
+            "failed" => Some(PrintOutcome::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// A print being logged. Everything optional except the outcome, because the
+/// friction of a long form is how a log stops being kept.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NewPrint {
+    /// Defaults to now.
+    pub printed_at: Option<i64>,
+    pub printer: String,
+    pub material: String,
+    pub settings: String,
+    pub outcome: String,
+    pub notes: String,
+    pub photo: Option<String>,
+    /// Which sliced file was run, when you know.
+    pub slice_id: Option<i64>,
+}
+
+/// A file a printer can actually run: the output of a slicer.
+///
+/// Kept because the reusable artifact in a workshop is not the model, it is
+/// "this model, sliced for that printer, at those settings, that we know
+/// works". A print record points at one, which is what makes running a job
+/// again exactly as it went last time possible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Slice {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub format: String,
+    pub size: i64,
+    pub mtime: i64,
+    /// Read out of the slicer's own comments where the format allows it. The
+    /// resin binaries are vendor formats and are left unparsed rather than
+    /// guessed at.
+    pub layer_height: Option<f64>,
+    pub print_time_secs: Option<i64>,
+    pub material_grams: Option<f64>,
+    pub printer: String,
+    pub model_id: Option<i64>,
+    pub package_id: Option<i64>,
+}
+
+/// Where the library keeps itself, so it can be backed up.
+///
+/// Only `db` matters: previews are derived from the models and rebuild
+/// themselves, so a backup that skips them loses nothing but time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryLocation {
+    pub data_dir: String,
+    pub db_path: String,
+    pub thumbs_dir: String,
+    pub db_bytes: i64,
+    pub thumbs_bytes: i64,
+    /// True when STLIBRARIAN_DATA_DIR is pointing this somewhere chosen.
+    pub overridden: bool,
+}
+
+/// Something a person sent back: a review, or a problem report.
+///
+/// Arrives unauthenticated from a copy of the app somewhere in the world, so
+/// every field is treated as hostile until a human has approved it. Nothing
+/// here is ever rendered publicly before that.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Feedback {
+    pub id: i64,
+    pub kind: String,
+    /// 1-5, reviews only.
+    pub rating: Option<i64>,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub app_version: String,
+    pub platform: String,
+    /// The person ticked "you may show this on the site". Without it a review
+    /// is private feedback no matter how good it is.
+    pub may_publish: bool,
+    pub status: String,
+    pub submitted_at: i64,
+    /// Kept for replying, never published.
+    pub contact: String,
+}
+
+/// What a copy of the app sends.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NewFeedback {
+    pub kind: String,
+    pub rating: Option<i64>,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub app_version: String,
+    pub platform: String,
+    pub may_publish: bool,
+    pub contact: String,
+}
+
+/// One approved review, as the public site sees it.
+///
+/// Deliberately a smaller shape than `Feedback`: contact details and status
+/// have no business leaving the server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicReview {
+    pub rating: i64,
+    pub body: String,
+    pub author: String,
+    pub printer: String,
+    pub published_at: i64,
 }

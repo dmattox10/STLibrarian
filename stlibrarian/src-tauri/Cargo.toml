@@ -1,11 +1,12 @@
 [package]
 name = "stlibrarian"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["Daniel Mattox"]
+description = "Local-first 3D model library that scales to a multi-user NAS"
+authors = ["Dan Mattox"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Two [[bin]] targets make a bare `cargo run` ambiguous, and `tauri dev`
+# shells out to exactly that. The desktop app is the one you mean.
+default-run = "stlibrarian"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -14,15 +15,78 @@ edition = "2021"
 name = "stlibrarian_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Two front doors onto one core.
+#
+# The desktop bin links Tauri, which on Linux drags in GTK and webkit2gtk. A NAS
+# is headless and has neither, so the server bin must be buildable without any
+# of it -- hence the feature split rather than one binary with a flag.
+#
+#   cargo build --bin stlibrarian                                        # desktop
+#   cargo build --no-default-features --features server --bin stlibrarian-server
+[[bin]]
+name = "stlibrarian"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "stlibrarian-server"
+path = "src/server/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-dialog", "dep:ureq"]
+server = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:tokio-util"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
+# --- shared core ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = "0.37.0"
+# `bundled` compiles SQLite in. Without it the NAS build depends on whatever
+# libsqlite3 the host happens to ship, which is exactly the surprise you do not
+# want on someone else's Synology.
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 sha2 = "0.10.9"
 log = "0.4.29"
+env_logger = "0.11"
+walkdir = "2"
+dirs = "5"
+argon2 = "0.5"
+# Must match the rand_core that password-hash uses, with getrandom on, or
+# `OsRng` is compiled out and salts have no entropy source.
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"
+# Thumbnails are rasterised in Rust so a headless NAS can build them without a
+# browser, a GPU, or anyone opening the web UI.
+png = "0.17"
+# Creator folders ship promotional renders, which make better thumbnails than
+# anything generated from the mesh. Decode + downscale only; no encoders beyond
+# the png crate above.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# 3MF is a zip of XML. Increasingly what a slicer hands you, and what a
+# creator ships alongside the STLs.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+
+# --- desktop only ---
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
+# Pinned to the same minor as the npm @tauri-apps/plugin-dialog package.
+# The Tauri CLI refuses to start if a plugin's JS package and Rust crate
+# disagree on major/minor, and a bare "2" on both sides let them resolve to
+# 2.7 and 2.6 respectively -- which broke `tauri dev` with a version
+# mismatch. Bump these two together or not at all.
+tauri-plugin-dialog = { version = "2.6", optional = true }
+# Desktop only. A client pointed at a remote library still has to put the file
+# into a slicer on *this* machine, which means fetching it in Rust rather than
+# pushing hundreds of megabytes through the webview's IPC.
+ureq = { version = "2", optional = true }
+
+# --- server only ---
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs"], optional = true }
+tower-http = { version = "0.6", features = ["cors", "fs"], optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }

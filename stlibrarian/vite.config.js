@@ -7,6 +7,17 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  build: {
+    rollupOptions: {
+      output: {
+        // three.js is most of the bundle and changes only when the dependency
+        // does. Splitting it means editing the UI does not invalidate it in
+        // the browser cache.
+        manualChunks: { three: ["three"] },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
