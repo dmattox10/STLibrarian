@@ -84,20 +84,14 @@ if [ -z "$MAC_MISSING" ]; then
 else
   bad "macOS builds will be UNSIGNED. Gatekeeper refuses these on download."
   echo "        missing:$MAC_MISSING"
-  echo "        Needs an Apple Developer account (\$99/yr) and a Developer ID"
-  echo "        Application certificate. See \"Signing\" in the README."
+  echo "        Run tools/setup-signing-macos.sh -- it does the whole thing."
 fi
 
-WIN_NEEDED="WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD WINDOWS_CERTIFICATE_THUMBPRINT"
-WIN_MISSING=""
-for k in $WIN_NEEDED; do have_secret "$k" || WIN_MISSING="$WIN_MISSING $k"; done
-if [ -z "$WIN_MISSING" ]; then
-  ok "Windows builds will be signed"
-else
-  bad "Windows builds will be UNSIGNED. SmartScreen will warn users."
-  echo "        missing:$WIN_MISSING"
-fi
-
+# Windows is deliberately not signed. An OV certificate would not silence
+# SmartScreen -- that needs EV plus reputation built over time -- so it is a
+# few hundred a year that changes nothing the user sees. The download page
+# says so plainly instead.
+ok "Windows builds are unsigned by choice; the site says so"
 ok "Linux builds need no signing"
 
 # --------------------------------------------------------- prove it works ----

@@ -135,6 +135,13 @@ section{padding-block:clamp(52px,7.5vw,82px);border-top:1px solid var(--edge-sof
 .price{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:1.5rem;color:var(--ink);font-weight:600}
 .price small{display:block;font-size:.7rem;font-weight:400;color:var(--ink-dim);letter-spacing:.04em;margin-top:4px}
 
+/* A plain aside, not a warning box. It is a fact about the download, and
+   dressing it in alarm colours would make it look worse than it is. */
+.note{max-width:var(--measure);padding:14px 16px;border:1px solid var(--edge-soft);
+  background:var(--panel);font-size:.85rem;line-height:1.6;color:var(--ink-dim)}
+.note b{color:var(--ink-body)}
+.note i{font-style:normal;font-family:var(--mono);font-size:.8rem;color:var(--frost)}
+
 /* ---------------------------------------------------- reviews --- */
 /* Hidden until the server hands over at least one approved review. There is
    nothing to submit here on purpose -- the app does the asking, a person
@@ -371,6 +378,14 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
       <a class="btn" href="https://github.com/dmattox10/stlibrarian-releases/releases/latest">Linux</a>
     </div>
     <p class="freenote">Free, and free to keep. No account, no telemetry.</p>
+
+    <p class="note">
+      <b>On Windows</b>, the installer is not code-signed, so SmartScreen will
+      say it does not recognise it. Click <i>More info</i> then <i>Run anyway</i>.
+      A certificate that actually removes that warning costs a few hundred a
+      year and buys nothing else, so the money goes into the software instead.
+      The Linux and macOS builds install normally.
+    </p>
   </section>
 
   <section id="docs" class="stack">

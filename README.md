@@ -262,65 +262,50 @@ The pipeline signs only when the secrets exist. Until then it keeps producing
 unsigned builds and prints a warning in the run log saying so, rather than
 failing. `tools/setup-releases.sh` reports exactly which half is configured.
 
-### macOS: Apple Developer, $99/yr
-
-You need a **Developer ID Application** certificate, which is the one for
-software distributed outside the App Store.
-
-1. In Xcode, *Settings -> Accounts -> Manage Certificates -> +* -> **Developer
-   ID Application**. Or create it at
-   <https://developer.apple.com/account/resources/certificates/list>.
-2. In **Keychain Access**, find it, right-click -> *Export*, save a `.p12` and
-   set an export password.
-3. Turn it into a secret and read off the identity string:
-
-   ```bash
-   base64 -i Certificates.p12 | pbcopy      # -> APPLE_CERTIFICATE
-   security find-identity -v -p codesigning # -> APPLE_SIGNING_IDENTITY
-   ```
-
-   The identity is the whole quoted string, like
-   `Developer ID Application: Dan Mattox (ABCDE12345)`.
-4. Notarization uses an **app-specific password**, never your Apple password.
-   Make one at <https://appleid.apple.com> under *Sign-In and Security ->
-   App-Specific Passwords*. Your team ID is the code in parentheses above.
-
-| Secret | Value |
-| --- | --- |
-| `APPLE_CERTIFICATE` | base64 of the `.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | the export password from step 2 |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: ...` |
-| `APPLE_ID` | your Apple account email |
-| `APPLE_PASSWORD` | the app-specific password |
-| `APPLE_TEAM_ID` | the ten-character team ID |
-
-### Windows: an OV or EV certificate, roughly $200-400/yr
-
-From any CA that issues code-signing certificates. An **OV** certificate is
-enough to be signed; only an **EV** one clears SmartScreen immediately, because
-an OV certificate has to build reputation first. Budget accordingly if the
-warning is the thing you are paying to remove.
+### macOS
 
 ```bash
-base64 -i cert.pfx | pbcopy    # -> WINDOWS_CERTIFICATE
+tools/setup-signing-macos.sh
 ```
 
-The thumbprint is the certificate's SHA-1, with spaces removed. In PowerShell
-on a machine where it is installed:
+It finds the certificate, exports it, asks for the two things it cannot know
+(your Apple ID and an app-specific password), uploads all six secrets, and
+shreds the temporary key file on the way out.
 
-```powershell
-Get-ChildItem Cert:\CurrentUser\My | Select-Object Thumbprint, Subject
-```
+One thing it checks that is easy to get wrong: **"Apple Development" is not the
+certificate you need.** That one signs builds for your own machines, and a
+download signed with it is still refused by Gatekeeper. Distribution outside
+the App Store needs a **Developer ID Application** certificate, which you ask
+Apple for separately:
 
-| Secret | Value |
+> Xcode -> Settings -> Accounts -> your Apple ID -> Manage Certificates -> the
+> **+** at the bottom left -> **Developer ID Application**
+
+Only a team's Account Holder or Admin may create one. The script says so, with
+this instruction, rather than exporting the wrong certificate and leaving you
+to discover it from a user.
+
+Notarization uses an **app-specific password** from
+<https://appleid.apple.com>, never your Apple ID password.
+
+| Secret | Where it comes from |
 | --- | --- |
-| `WINDOWS_CERTIFICATE` | base64 of the `.pfx` |
-| `WINDOWS_CERTIFICATE_PASSWORD` | its export password |
-| `WINDOWS_CERTIFICATE_THUMBPRINT` | SHA-1, no spaces |
+| `APPLE_CERTIFICATE` | base64 of the exported `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | the export password you invent |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: ...`, read from the keychain |
+| `APPLE_ID` | your Apple account email |
+| `APPLE_PASSWORD` | the app-specific password |
+| `APPLE_TEAM_ID` | the ten characters in the identity's parentheses |
 
-The thumbprint is layered over `tauri.conf.json` at build time rather than
-committed, because it belongs to a particular certificate and changes when the
-certificate is renewed.
+### Windows: deliberately unsigned
+
+Not worth the money. An **OV** certificate makes a build signed but does *not*
+silence SmartScreen, which needs an **EV** certificate plus reputation built
+over time. So the cheaper option buys nothing a user would notice, and the
+expensive one is a few hundred a year to remove one warning click.
+
+The download page says plainly that Windows will warn, which costs nothing and
+is true. Revisit when enough people are downloading for the friction to matter.
 
 ### Linux
 
@@ -328,18 +313,17 @@ Nothing to do. AppImage, `.deb` and `.rpm` are all installable unsigned.
 
 ### Setting them
 
+`tools/setup-signing-macos.sh` sets them. To check what landed at any time:
+
 ```bash
-gh secret set APPLE_CERTIFICATE --repo dmattox10/STLibrarian < cert.b64
-gh secret set APPLE_SIGNING_IDENTITY --repo dmattox10/STLibrarian
-# ...and so on; then check what landed:
 tools/setup-releases.sh
 ```
 
-### Until you have certificates
+### Until the macOS certificate exists
 
-Linux is unaffected. For the other two, the honest move is to say so on the
-download page rather than let people meet the error cold: on macOS, right-click
-the app and choose *Open* the first time, or run `xattr -cr /Applications/STLibrarian.app`.
+Linux is unaffected. On macOS, right-click the app and choose *Open* the first
+time, or run `xattr -cr /Applications/STLibrarian.app`. Say this on the download
+page rather than letting people meet the error cold.
 
 ## How it is put together
 
