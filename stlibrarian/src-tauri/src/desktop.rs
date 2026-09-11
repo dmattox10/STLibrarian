@@ -1,7 +1,7 @@
 use crate::core::db;
 use crate::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
-    PackageSuggestion, PrintRecord, ScanReport, TagCount,
+    PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount,
 };
 use crate::core::paths;
 use crate::core::scanner;
@@ -147,6 +147,47 @@ fn assign_to_package(package_id: i64, model_ids: Vec<i64>) -> Result<usize, Stri
 fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
     let c = conn()?;
     db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- slices ----
+
+#[command]
+fn slices(model_id: i64) -> Result<Vec<Slice>, String> {
+    let c = conn()?;
+    db::slices_for_model(&c, model_id).map_err(|e| e.to_string())
+}
+
+#[command]
+fn orphan_slices() -> Result<Vec<Slice>, String> {
+    let c = conn()?;
+    db::unattached_slices(&c).map_err(|e| e.to_string())
+}
+
+#[command]
+fn set_slice_owner(
+    slice_id: i64,
+    model_id: Option<i64>,
+    package_id: Option<i64>,
+) -> Result<(), String> {
+    let c = conn()?;
+    db::set_slice_owner(&c, slice_id, model_id, package_id).map_err(|e| e.to_string())
+}
+
+/// Hand a sliced file to whatever opens it -- Lychee, Chitubox, a gcode viewer.
+#[command]
+fn open_slice(app: tauri::AppHandle, slice_id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let c = conn()?;
+    let path: String = c
+        .query_row(
+            "SELECT path FROM slices WHERE id = ?1",
+            rusqlite::params![slice_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "No such sliced file".to_string())?;
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| format!("Could not open it: {}", e))
 }
 
 // ---------------------------------------------------------------- prints ----
@@ -402,6 +443,10 @@ pub fn run() {
             delete_print,
             open_in_slicer,
             reveal_in_folder,
+            slices,
+            orphan_slices,
+            set_slice_owner,
+            open_slice,
             set_provenance,
             creators,
             get_thumb,

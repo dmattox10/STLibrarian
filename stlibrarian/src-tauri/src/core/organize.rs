@@ -228,28 +228,12 @@ mod tests {
         let root = Path::new("/library");
         for hostile in ["../../etc", "..", "/absolute", "a/../../b"] {
             let model = crate::core::models::ModelRecord {
-                id: 1,
                 path: format!("/elsewhere/{}.stl", hostile),
                 name: hostile.to_string(),
-                size: 1,
-                hash: "h".into(),
-                triangles: 1,
-                dim_x: 1.0,
-                dim_y: 1.0,
-                dim_z: 1.0,
-                has_thumb: false,
-                volume: 0.0,
                 creator: hostile.to_string(),
-                source: String::new(),
                 package_id: None,
-                render: None,
-                print_count: 0,
-                last_printed: None,
                 variant: hostile.to_string(),
-                watertight: true,
-                mtime: 0,
-                tags: vec![],
-                collections: vec![],
+                ..Default::default()
             };
             let dest = destination(root, &model, Some(hostile));
             assert!(
@@ -270,28 +254,12 @@ mod tests {
     fn a_package_puts_its_parts_in_one_folder() {
         let root = Path::new("/library");
         let mut model = crate::core::models::ModelRecord {
-            id: 1,
             path: "/old/Throk_Body.stl".into(),
             name: "Throk_Body".into(),
-            size: 1,
-            hash: "h".into(),
-            triangles: 1,
-            dim_x: 1.0,
-            dim_y: 1.0,
-            dim_z: 1.0,
-            has_thumb: false,
-            volume: 0.0,
             creator: "Archvillain Games".into(),
-            source: String::new(),
             package_id: Some(7),
-            render: None,
-            print_count: 0,
-            last_printed: None,
             variant: "unsupported".into(),
-            watertight: true,
-            mtime: 0,
-            tags: vec![],
-            collections: vec![],
+            ..Default::default()
         };
         let a = destination(root, &model, Some("Throk 130mm"));
         model.name = "Throk_ARM".into();
@@ -309,28 +277,12 @@ mod tests {
     fn a_model_with_no_creator_is_filed_under_unsorted() {
         let root = Path::new("/library");
         let model = crate::core::models::ModelRecord {
-            id: 1,
             path: "/old/x.stl".into(),
             name: "x".into(),
-            size: 1,
-            hash: "h".into(),
-            triangles: 1,
-            dim_x: 1.0,
-            dim_y: 1.0,
-            dim_z: 1.0,
-            has_thumb: false,
-            volume: 0.0,
             creator: "   ".into(),
-            source: String::new(),
             package_id: None,
-            render: None,
-            print_count: 0,
-            last_printed: None,
             variant: String::new(),
-            watertight: true,
-            mtime: 0,
-            tags: vec![],
-            collections: vec![],
+            ..Default::default()
         };
         assert_eq!(
             destination(root, &model, None),

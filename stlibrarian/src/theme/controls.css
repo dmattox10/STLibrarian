@@ -1210,3 +1210,76 @@
   white-space: nowrap;
   direction: rtl;
 }
+
+/* ------------------------------------------------------------ sliced --- */
+
+.slicerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(76, 86, 106, 0.4);
+}
+
+.slicerow:first-of-type {
+  border-top: 0;
+}
+
+.slicerow__fmt {
+  flex: none;
+  padding: 2px 5px;
+  font-family: var(--font-num);
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--nord0);
+  background: var(--nord7);
+}
+
+.slicerow__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+}
+
+.slicerow__name {
+  font-size: 12px;
+  color: var(--ink-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slicerow__meta {
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slicerow .collrow__x {
+  opacity: 0;
+  width: 20px;
+}
+
+.slicerow:hover .collrow__x,
+.slicerow .collrow__x:focus-visible {
+  opacity: 1;
+}
+
+/* The sliced file a past run actually used. */
+.printrow__slice {
+  align-self: flex-start;
+  padding: 1px 5px;
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--nord7);
+  border: 1px solid var(--nord3);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

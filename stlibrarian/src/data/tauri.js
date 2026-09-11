@@ -64,6 +64,12 @@ export function createTauriAdapter() {
     openInSlicer: (modelId) => invoke("open_in_slicer", { modelId }),
     revealInFolder: (modelId) => invoke("reveal_in_folder", { modelId }),
 
+    slices: (modelId) => invoke("slices", { modelId }),
+    orphanSlices: () => invoke("orphan_slices"),
+    setSliceOwner: (sliceId, modelId, packageId = null) =>
+      invoke("set_slice_owner", { sliceId, modelId, packageId }),
+    openSlice: (sliceId) => invoke("open_slice", { sliceId }),
+
     // Deliberately absent on the desktop: rearranging a collection is the
     // Pro server's job, so it is built once rather than per platform.
     organizePlan: null,

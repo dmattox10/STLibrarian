@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
     Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, NewPrint, Package,
-    PackageSuggestion, PrintRecord, ScanReport, TagCount, User,
+    PackageSuggestion, PrintRecord, ScanReport, Slice, TagCount, User,
 };
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
 use stlibrarian_lib::core::{auth, db, organize, paths, scanner, stl, thumbs};
@@ -505,6 +505,71 @@ async fn organize_apply_route(
         .map(Json)
 }
 
+// ---------------------------------------------------------------- slices ----
+
+#[derive(Deserialize)]
+struct SliceOwnerReq {
+    model_id: Option<i64>,
+    package_id: Option<i64>,
+}
+
+async fn slices_route(Path(id): Path<i64>) -> Result<Json<Vec<Slice>>, ApiError> {
+    with_db(move |conn| db::slices_for_model(conn, id).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn orphan_slices_route() -> Result<Json<Vec<Slice>>, ApiError> {
+    with_db(|conn| db::unattached_slices(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn set_slice_owner_route(
+    Path(id): Path<i64>,
+    Json(req): Json<SliceOwnerReq>,
+) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| {
+        db::set_slice_owner(conn, id, req.model_id, req.package_id).map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Download the sliced file itself -- which is how a desktop client connected
+/// to a remote server can hand it to a local slicer.
+async fn slice_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
+    let path = with_db(move |conn| {
+        conn.query_row(
+            "SELECT path FROM slices WHERE id = ?1",
+            rusqlite::params![id],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await?;
+
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "slice".into());
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", name),
+            ),
+        ],
+        Body::from_stream(ReaderStream::new(file)),
+    )
+        .into_response())
+}
+
 // ---------------------------------------------------------------- prints ----
 
 async fn prints_route(Path(id): Path<i64>) -> Result<Json<Vec<PrintRecord>>, ApiError> {
@@ -728,6 +793,10 @@ async fn main() {
         .route("/duplicates", get(duplicates_route))
         .route("/organize/plan", post(organize_plan_route))
         .route("/organize/apply", post(organize_apply_route))
+        .route("/models/{id}/slices", get(slices_route))
+        .route("/slices/unattached", get(orphan_slices_route))
+        .route("/slices/{id}/owner", post(set_slice_owner_route))
+        .route("/slices/{id}/file", get(slice_file_route))
         .route("/models/{id}/prints", get(prints_route))
         .route("/models/{id}/prints", post(log_print_route))
         .route("/prints/{id}", delete(delete_print_route))

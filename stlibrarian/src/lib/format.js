@@ -90,3 +90,12 @@ export function formatWeight(mm3, material = "resin") {
   const grams = (mm3 / 1000) * (DENSITY[material] ?? DENSITY.resin);
   return grams >= 100 ? `${Math.round(grams)} g` : `${grams.toFixed(1)} g`;
 }
+
+/** "2h 13m" -- minutes matter, seconds do not. */
+export function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return null;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  if (h === 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}

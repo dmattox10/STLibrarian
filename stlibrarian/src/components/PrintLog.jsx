@@ -28,6 +28,8 @@ export default function PrintLog({ api, model, onChanged }) {
   const [material, setMaterial] = useState("");
   const [settings, setSettings] = useState("");
   const [notes, setNotes] = useState("");
+  const [sliceId, setSliceId] = useState("");
+  const [slices, setSlices] = useState([]);
   const [error, setError] = useState(null);
 
   const load = () =>
@@ -42,17 +44,42 @@ export default function PrintLog({ api, model, onChanged }) {
       .prints(model.id)
       .then((h) => !cancelled && setHistory(h))
       .catch(() => !cancelled && setHistory([]));
+    api
+      .slices(model.id)
+      .then((s) => !cancelled && setSlices(s))
+      .catch(() => !cancelled && setSlices([]));
     setAdding(false);
     setError(null);
     return () => {
       cancelled = true;
     };
-  }, [api, model.id]);
+  }, [api, model.id, model.slice_count]);
+
+  const sliceName = (id) => slices.find((s) => s.id === id)?.name;
+
+  // Refill the form from a previous run. The whole point of keeping sliced
+  // files: doing it again exactly as it went is a click, not a memory test.
+  const repeat = (p) => {
+    setOutcome("success");
+    setPrinter(p.printer || "");
+    setMaterial(p.material || "");
+    setSettings(p.settings || "");
+    setNotes("");
+    setSliceId(p.slice_id ? String(p.slice_id) : "");
+    setAdding(true);
+  };
 
   const submit = async () => {
     setError(null);
     try {
-      await api.logPrint(model.id, { outcome, printer, material, settings, notes });
+      await api.logPrint(model.id, {
+        outcome,
+        printer,
+        material,
+        settings,
+        notes,
+        slice_id: sliceId ? Number(sliceId) : null,
+      });
       // Remember the printer and material: the next print is usually on the
       // same machine with the same bottle.
       setSettings("");
@@ -88,6 +115,22 @@ export default function PrintLog({ api, model, onChanged }) {
         {adding ? (
           <div className="stack" style={{ gap: 7 }}>
             <Segmented value={outcome} onChange={setOutcome} options={OUTCOMES} label="Outcome" />
+            {slices.length > 0 ? (
+              <Field>
+                <select
+                  value={sliceId}
+                  onChange={(e) => setSliceId(e.target.value)}
+                  aria-label="Which sliced file was run"
+                >
+                  <option value="">Which slice? (optional)</option>
+                  {slices.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.format})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field>
               <input
                 value={printer}
@@ -150,8 +193,22 @@ export default function PrintLog({ api, model, onChanged }) {
                   {[p.material, p.settings].filter(Boolean).join(" · ")}
                 </span>
               ) : null}
+              {p.slice_id && sliceName(p.slice_id) ? (
+                <span className="printrow__slice" title="The sliced file that was run">
+                  {sliceName(p.slice_id)}
+                </span>
+              ) : null}
               {p.notes ? <span className="printrow__notes">{p.notes}</span> : null}
             </div>
+            <button
+              type="button"
+              className="collrow__x"
+              aria-label="Log another run like this one"
+              title="Run it again the same way"
+              onClick={() => repeat(p)}
+            >
+              &#8635;
+            </button>
             <button
               type="button"
               className="collrow__x"

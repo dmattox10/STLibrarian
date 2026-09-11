@@ -1,6 +1,6 @@
 use crate::core::models::{
     Collection, DuplicateGroup, LibraryQuery, ModelRecord, Package, PackageSuggestion, PrintRecord,
-    TagCount,
+    Slice, TagCount,
 };
 use log::error;
 use rusqlite::{params, Connection, OptionalExtension, Result};
@@ -62,6 +62,22 @@ fn migrate(conn: &Connection) -> Result<()> {
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS slices (
+            id              INTEGER PRIMARY KEY,
+            path            TEXT UNIQUE NOT NULL,
+            name            TEXT NOT NULL,
+            dir             TEXT NOT NULL,
+            parent_dir      TEXT NOT NULL,
+            format          TEXT NOT NULL,
+            size            INTEGER NOT NULL,
+            mtime           INTEGER NOT NULL,
+            layer_height    REAL,
+            print_time_secs INTEGER,
+            material_grams  REAL,
+            printer         TEXT NOT NULL DEFAULT '',
+            model_id        INTEGER,
+            package_id      INTEGER
+        );
         CREATE TABLE IF NOT EXISTS prints (
             id         INTEGER PRIMARY KEY,
             model_id   INTEGER NOT NULL,
@@ -71,7 +87,10 @@ fn migrate(conn: &Connection) -> Result<()> {
             settings   TEXT NOT NULL DEFAULT '',
             outcome    TEXT NOT NULL,
             notes      TEXT NOT NULL DEFAULT '',
-            photo      TEXT
+            photo      TEXT,
+            -- Which sliced file was actually run, when one is known. This is
+            -- what turns a log entry into a repeatable job.
+            slice_id   INTEGER
         );
         CREATE TABLE IF NOT EXISTS images (
             id    INTEGER PRIMARY KEY,
@@ -157,6 +176,9 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_models_dir ON models(dir);
         CREATE INDEX IF NOT EXISTS idx_images_dir ON images(dir);
         CREATE INDEX IF NOT EXISTS idx_prints_model ON prints(model_id);
+        CREATE INDEX IF NOT EXISTS idx_slices_model ON slices(model_id);
+        CREATE INDEX IF NOT EXISTS idx_slices_package ON slices(package_id);
+        CREATE INDEX IF NOT EXISTS idx_slices_dir ON slices(dir);
         ",
     )?;
     Ok(())
@@ -239,7 +261,10 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
                 (SELECT path FROM images WHERE id = models.image_id),
                 (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
                 (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id),
-                variant, watertight
+                variant, watertight,
+                (SELECT COUNT(*) FROM slices WHERE slices.model_id = models.id
+                    OR (models.package_id IS NOT NULL
+                        AND slices.package_id = models.package_id))
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -340,6 +365,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             last_printed: row.get(17)?,
             variant: row.get(18)?,
             watertight: row.get::<_, i64>(19)? != 0,
+            slice_count: row.get(20)?,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -396,7 +422,10 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     (SELECT path FROM images WHERE id = models.image_id),
                     (SELECT COUNT(*) FROM prints WHERE prints.model_id = models.id),
                     (SELECT MAX(printed_at) FROM prints WHERE prints.model_id = models.id),
-                    variant, watertight
+                    variant, watertight,
+                    (SELECT COUNT(*) FROM slices WHERE slices.model_id = models.id
+                        OR (models.package_id IS NOT NULL
+                            AND slices.package_id = models.package_id))
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -421,6 +450,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     last_printed: row.get(17)?,
                     variant: row.get(18)?,
                     watertight: row.get::<_, i64>(19)? != 0,
+            slice_count: row.get(20)?,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -948,6 +978,141 @@ mod tests {
         assert!(list_packages(&conn).unwrap().is_empty());
         let still = get_model(&conn, a).unwrap().expect("model survives");
         assert!(still.package_id.is_none());
+    }
+
+    // ---------------------------------------------------------- slices ----
+
+    fn add_slice(conn: &Connection, path: &str) {
+        upsert_slice(conn, path, 1024, 0, &crate::core::sliced::SliceMeta::default()).unwrap();
+    }
+
+    #[test]
+    fn a_slice_named_after_a_model_attaches_to_it() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/knight.stl", 10, "a");
+        model_at(&conn, "/lib/Hero/goblin.stl", 10, "b");
+        add_slice(&conn, "/lib/Hero/knight.gcode");
+
+        assert_eq!(match_slices(&conn).unwrap(), 1);
+        let slices = slices_for_model(&conn, id).unwrap();
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].format, "gcode");
+    }
+
+    #[test]
+    fn a_slice_alone_beside_one_model_attaches_to_it() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/knight.stl", 10, "a");
+        add_slice(&conn, "/lib/Hero/plate_final_v2.ctb");
+
+        assert_eq!(match_slices(&conn).unwrap(), 1);
+        assert_eq!(slices_for_model(&conn, id).unwrap().len(), 1);
+    }
+
+    /// The case worth refusing: several models, no name match. Guessing here
+    /// attaches the wrong output to the wrong model, which is worse than
+    /// leaving it for someone to say.
+    #[test]
+    fn an_ambiguous_slice_is_left_unattached() {
+        let conn = db();
+        model_at(&conn, "/lib/Pack/knight.stl", 10, "a");
+        model_at(&conn, "/lib/Pack/goblin.stl", 10, "b");
+        model_at(&conn, "/lib/Pack/ogre.stl", 10, "c");
+        add_slice(&conn, "/lib/Pack/plate_1.gcode");
+
+        assert_eq!(match_slices(&conn).unwrap(), 0);
+        assert_eq!(unattached_slices(&conn).unwrap().len(), 1);
+    }
+
+    /// A plate sliced from a package belongs to the package, not to whichever
+    /// part happens to sort first.
+    #[test]
+    fn a_plate_in_a_package_folder_attaches_to_the_package() {
+        let conn = db();
+        let a = model_at(&conn, "/lib/Throk/body.stl", 10, "a");
+        let b = model_at(&conn, "/lib/Throk/arm.stl", 10, "b");
+        let pkg = create_package(&conn, "Throk", "/lib/Throk").unwrap();
+        assign_to_package(&conn, pkg.id, &[a, b]).unwrap();
+        add_slice(&conn, "/lib/Throk/whole_plate.ctb");
+
+        assert_eq!(match_slices(&conn).unwrap(), 1);
+        // Reachable from either part, because it is the model's output.
+        assert_eq!(slices_for_model(&conn, a).unwrap().len(), 1);
+        assert_eq!(slices_for_model(&conn, b).unwrap().len(), 1);
+        assert!(unattached_slices(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_slice_one_folder_up_still_finds_its_model() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/Unsupported/knight.stl", 10, "a");
+        add_slice(&conn, "/lib/Hero/knight.gcode");
+        assert_eq!(match_slices(&conn).unwrap(), 1);
+        assert_eq!(slices_for_model(&conn, id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn attaching_by_hand_overrides_and_detaching_works() {
+        let conn = db();
+        let knight = model_at(&conn, "/lib/Pack/knight.stl", 10, "a");
+        model_at(&conn, "/lib/Pack/goblin.stl", 10, "b");
+        add_slice(&conn, "/lib/Pack/plate.gcode");
+        let orphan = unattached_slices(&conn).unwrap();
+        assert_eq!(orphan.len(), 1);
+
+        set_slice_owner(&conn, orphan[0].id, Some(knight), None).unwrap();
+        assert_eq!(slices_for_model(&conn, knight).unwrap().len(), 1);
+        assert_eq!(get_model(&conn, knight).unwrap().unwrap().slice_count, 1);
+
+        set_slice_owner(&conn, orphan[0].id, None, None).unwrap();
+        assert!(slices_for_model(&conn, knight).unwrap().is_empty());
+        assert_eq!(unattached_slices(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rescanning_a_slice_updates_it_rather_than_duplicating() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/knight.stl", 10, "a");
+        add_slice(&conn, "/lib/Hero/knight.gcode");
+        match_slices(&conn).unwrap();
+
+        upsert_slice(
+            &conn,
+            "/lib/Hero/knight.gcode",
+            2048,
+            99,
+            &crate::core::sliced::SliceMeta {
+                layer_height: Some(0.1),
+                print_time_secs: Some(3600),
+                material_grams: Some(14.0),
+                printer: Some("MK4".into()),
+            },
+        )
+        .unwrap();
+
+        let slices = slices_for_model(&conn, id).unwrap();
+        assert_eq!(slices.len(), 1, "re-slicing must not create a second row");
+        assert_eq!(slices[0].size, 2048);
+        assert_eq!(slices[0].layer_height, Some(0.1));
+        assert_eq!(slices[0].printer, "MK4");
+        // The attachment survives a re-slice.
+        assert_eq!(slices[0].model_id, Some(id));
+    }
+
+    /// The payoff: a log entry that knows which file was run.
+    #[test]
+    fn a_print_can_record_which_slice_was_used() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/knight.stl", 10, "a");
+        add_slice(&conn, "/lib/Hero/knight.gcode");
+        match_slices(&conn).unwrap();
+        let slice = slices_for_model(&conn, id).unwrap()[0].id;
+
+        let mut entry = a_print("success");
+        entry.slice_id = Some(slice);
+        add_print(&conn, id, &entry).unwrap();
+
+        assert_eq!(list_prints(&conn, id).unwrap()[0].slice_id, Some(slice));
     }
 
     // ---------------------------------------------------------- prints ----
@@ -1973,8 +2138,9 @@ pub fn add_print(
         return Err("No such model".into());
     }
     conn.execute(
-        "INSERT INTO prints (model_id, printed_at, printer, material, settings, outcome, notes, photo)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO prints
+            (model_id, printed_at, printer, material, settings, outcome, notes, photo, slice_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             model_id,
             entry.printed_at.unwrap_or_else(now),
@@ -1984,6 +2150,7 @@ pub fn add_print(
             outcome.as_str(),
             entry.notes.trim(),
             entry.photo,
+            entry.slice_id,
         ],
     )
     .map_err(|e| format!("Could not save print: {}", e))?;
@@ -1992,7 +2159,8 @@ pub fn add_print(
 
 pub fn list_prints(conn: &Connection, model_id: i64) -> Result<Vec<PrintRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, model_id, printed_at, printer, material, settings, outcome, notes, photo
+        "SELECT id, model_id, printed_at, printer, material, settings, outcome, notes, photo,
+                slice_id
          FROM prints WHERE model_id = ?1
          ORDER BY printed_at DESC, id DESC",
     )?;
@@ -2008,6 +2176,7 @@ pub fn list_prints(conn: &Connection, model_id: i64) -> Result<Vec<PrintRecord>>
                 .unwrap_or(crate::core::models::PrintOutcome::Success),
             notes: r.get(7)?,
             photo: r.get(8)?,
+            slice_id: r.get(9)?,
         })
     })?;
     Ok(rows.flatten().collect())
@@ -2044,4 +2213,210 @@ pub fn relocate_model(conn: &Connection, model_id: i64, new_path: &str) -> Resul
         params![model_id, new_path, dir, parent_dir],
     )?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- slices ----
+
+fn slice_from_row(r: &rusqlite::Row) -> Result<Slice> {
+    Ok(Slice {
+        id: r.get(0)?,
+        path: r.get(1)?,
+        name: r.get(2)?,
+        format: r.get(3)?,
+        size: r.get(4)?,
+        mtime: r.get(5)?,
+        layer_height: r.get(6)?,
+        print_time_secs: r.get(7)?,
+        material_grams: r.get(8)?,
+        printer: r.get(9)?,
+        model_id: r.get(10)?,
+        package_id: r.get(11)?,
+    })
+}
+
+const SLICE_COLUMNS: &str = "id, path, name, format, size, mtime, layer_height,
+     print_time_secs, material_grams, printer, model_id, package_id";
+
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_slice(
+    conn: &Connection,
+    path: &str,
+    size: i64,
+    mtime: i64,
+    meta: &crate::core::sliced::SliceMeta,
+) -> Result<()> {
+    let file = Path::new(path);
+    let name = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let dir = file
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent_dir = Path::new(&dir)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    conn.execute(
+        "INSERT INTO slices
+            (path, name, dir, parent_dir, format, size, mtime,
+             layer_height, print_time_secs, material_grams, printer)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(path) DO UPDATE SET
+            size = ?6, mtime = ?7, layer_height = ?8,
+            print_time_secs = ?9, material_grams = ?10, printer = ?11",
+        params![
+            path,
+            name,
+            dir,
+            parent_dir,
+            crate::core::sliced::format_of(file),
+            size,
+            mtime,
+            meta.layer_height,
+            meta.print_time_secs,
+            meta.material_grams,
+            meta.printer.clone().unwrap_or_default(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Attach sliced files to what they were sliced from -- but only when it is
+/// obvious.
+///
+/// A slice named after a model, or sitting alone beside one, is unambiguous. A
+/// folder holding six models and a plate file is not, and guessing there would
+/// attach the wrong output to the wrong model, which is worse than leaving it
+/// for someone to say. Same principle as package suggestions.
+pub fn match_slices(conn: &Connection) -> Result<usize> {
+    let pending: Vec<(i64, String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, dir, parent_dir FROM slices
+             WHERE model_id IS NULL AND package_id IS NULL",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        rows.flatten().collect()
+    };
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut attached = 0usize;
+    {
+        let mut nearby = tx.prepare(
+            // Three relationships, all of which occur in real packs: the
+            // slice beside the model, the slice one level up from a parts
+            // folder, and the model one level down from where the slice sits.
+            "SELECT id, name, package_id FROM models
+             WHERE dir = ?1 OR dir = ?2 OR parent_dir = ?1",
+        )?;
+        let mut to_model = tx.prepare("UPDATE slices SET model_id = ?2 WHERE id = ?1")?;
+        let mut to_package = tx.prepare("UPDATE slices SET package_id = ?2 WHERE id = ?1")?;
+
+        for (slice_id, slice_name, dir, parent_dir) in pending {
+            let candidates: Vec<(i64, String, Option<i64>)> = nearby
+                .query_map(params![dir, parent_dir], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .flatten()
+                .collect();
+
+            if candidates.is_empty() {
+                continue;
+            }
+
+            // A plate sliced from a package belongs to the package, not to
+            // whichever part happens to sort first.
+            let packages: Vec<i64> = {
+                let mut ids: Vec<i64> = candidates.iter().filter_map(|(_, _, p)| *p).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            };
+            if packages.len() == 1 && candidates.iter().all(|(_, _, p)| p.is_some()) {
+                to_package.execute(params![slice_id, packages[0]])?;
+                attached += 1;
+                continue;
+            }
+
+            let named = candidates
+                .iter()
+                .find(|(_, name, _)| name.eq_ignore_ascii_case(&slice_name));
+            let chosen = match named {
+                Some((id, _, _)) => Some(*id),
+                // Exactly one model nearby, so there is nothing to confuse it
+                // with. More than one and no name match: leave it alone.
+                None if candidates.len() == 1 => Some(candidates[0].0),
+                None => None,
+            };
+
+            if let Some(model_id) = chosen {
+                to_model.execute(params![slice_id, model_id])?;
+                attached += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(attached)
+}
+
+/// Everything printable for this model, including anything sliced from the
+/// package it belongs to.
+pub fn slices_for_model(conn: &Connection, model_id: i64) -> Result<Vec<Slice>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SLICE_COLUMNS} FROM slices
+         WHERE model_id = ?1
+            OR (package_id IS NOT NULL
+                AND package_id = (SELECT package_id FROM models WHERE id = ?1))
+         ORDER BY mtime DESC"
+    ))?;
+    let rows = stmt.query_map(params![model_id], |r| slice_from_row(r))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Sliced files nobody could place. Offered for attaching by hand.
+pub fn unattached_slices(conn: &Connection) -> Result<Vec<Slice>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SLICE_COLUMNS} FROM slices
+         WHERE model_id IS NULL AND package_id IS NULL
+         ORDER BY mtime DESC"
+    ))?;
+    let rows = stmt.query_map([], |r| slice_from_row(r))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Attach by hand, or pass None for both to detach.
+pub fn set_slice_owner(
+    conn: &Connection,
+    slice_id: i64,
+    model_id: Option<i64>,
+    package_id: Option<i64>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE slices SET model_id = ?2, package_id = ?3 WHERE id = ?1",
+        params![slice_id, model_id, package_id],
+    )?;
+    Ok(())
+}
+
+/// Rows whose sliced file is gone. Reported, never deleted -- the same reason
+/// as missing models: an unplugged drive must not empty the library.
+pub fn find_missing_slices(conn: &Connection) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare("SELECT id, path FROM slices")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows
+        .flatten()
+        .filter(|(_, p)| !Path::new(p).exists())
+        .collect())
 }

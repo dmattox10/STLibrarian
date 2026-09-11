@@ -1,6 +1,6 @@
 use crate::core::db::{tag_model, upsert_model, Upsert};
 use crate::core::models::ScanReport;
-use crate::core::stl;
+use crate::core::{sliced, stl};
 use log::{info, warn};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,12 @@ where
         if !entry.file_type().is_file() {
             continue;
         }
+        if sliced::is_sliced(entry.path()) {
+            // Not a model and not counted as one -- it is what a model becomes
+            // once a slicer has been at it.
+            index_slice(conn, entry.path());
+            continue;
+        }
         if is_image(entry.path()) {
             // Indexed but not counted: a promo render is not a model, it is
             // how a model gets a better thumbnail than the mesh can give it.
@@ -68,6 +74,12 @@ where
 
     // Renders are matched once the models exist, so ordering within the walk
     // does not matter.
+    match crate::core::db::match_slices(conn) {
+        Ok(n) if n > 0 => info!("Attached {} sliced files to their models", n),
+        Err(e) => warn!("Could not attach sliced files: {}", e),
+        _ => {}
+    }
+
     match crate::core::db::match_images(conn) {
         Ok(n) if n > 0 => info!("Matched {} models to creator renders", n),
         Err(e) => warn!("Could not match renders: {}", e),
@@ -157,6 +169,27 @@ fn index_image(conn: &Connection, path: &Path) {
         mtime,
     ) {
         warn!("Could not index image {}: {}", path.display(), e);
+    }
+}
+
+fn index_slice(conn: &Connection, path: &Path) {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // Unreadable metadata is not a reason to forget the file exists.
+    let parsed = sliced::read_meta(path).unwrap_or_default();
+    if let Err(e) =
+        crate::core::db::upsert_slice(conn, &path.to_string_lossy(), meta.len() as i64, mtime, &parsed)
+    {
+        warn!("Could not index sliced file {}: {}", path.display(), e);
     }
 }
 

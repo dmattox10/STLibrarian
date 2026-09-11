@@ -119,8 +119,8 @@ never have, which is the question a pile of downloads cannot answer.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --no-default-features --lib   # core: 101 tests
-tools/e2e.sh                                             # server + API: 114 checks
+cd src-tauri && cargo test --no-default-features --lib   # core: 117 tests
+tools/e2e.sh                                             # server + API: 131 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
@@ -182,6 +182,29 @@ whole STL, and there is only one GPU context to share.
 Left-drag orbits, scroll zooms, right-drag pans, and Reset re-frames if you
 lose the model off screen. Auto-spin rotates the mesh rather than the camera,
 so it does not fight an orbit you set yourself.
+
+## Sliced files
+
+A model is not printable. The gap between an STL and a print is slicing, and
+slicing is supports, orientation and profiles -- an enormous problem that
+belongs to PrusaSlicer and Lychee, not here.
+
+What a library can do is keep the result. Save a slicer's output beside the
+model and the next scan picks it up, reads the slicer's own comments for layer
+height, print time, material and printer, and attaches it. A print record can
+then point at the exact file that was run, so repeating a job is a click rather
+than a memory test.
+
+Attachment happens only when it is unambiguous -- a slice named after a model,
+or alone beside one. A folder holding six models and a plate file is left for
+you to place, because guessing there attaches the wrong output to the wrong
+model. Plates sliced from a package attach to the package, so every part can
+find them.
+
+Only text gcode is parsed. The resin formats are vendor binaries with versioned
+and sometimes obfuscated headers; guessing at those would produce confident
+wrong numbers, which is worse than none, so a `.ctb` shows its size and nothing
+it has not earned.
 
 ## Pro: organising files on disk
 

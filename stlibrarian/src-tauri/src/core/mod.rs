@@ -5,5 +5,6 @@ pub mod organize;
 pub mod paths;
 pub mod raster;
 pub mod scanner;
+pub mod sliced;
 pub mod stl;
 pub mod thumbs;

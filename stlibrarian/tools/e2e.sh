@@ -393,6 +393,56 @@ check "  triangles counted"      "$(api "$BASE/api/models?sort=name" | python3 -
 check "  bounds measured"        "$(api "$BASE/api/models" | python3 -c 'import sys,json;m=next(m for m in json.load(sys.stdin) if m["path"].endswith(".3mf"));print("%gx%gx%g" % (m["dim_x"],m["dim_y"],m["dim_z"]))')" "7x8x9"
 check "  and it previews"        "$(api_code "$BASE/api/thumb/$(api "$BASE/api/models" | python3 -c 'import sys,json;print(next(m["hash"] for m in json.load(sys.stdin) if m["path"].endswith(".3mf")))')")" 200
 
+echo "== sliced files =="
+# A gcode beside a model, carrying the comments a slicer actually writes.
+mkdir -p "$WORK/models/Sliced"
+cp "$WORK/models/cube.stl" "$WORK/models/Sliced/paladin.stl"
+cat > "$WORK/models/Sliced/paladin.gcode" <<'PYGCODE'
+;FLAVOR:Marlin
+; layer_height = 0.15
+; printer_model = MK4
+G28
+G1 X10 Y10 F3000
+; filament used [g] = 12.34
+; estimated printing time (normal mode) = 2h 13m 5s
+PYGCODE
+# And an ambiguous one: two models, no name match.
+mkdir -p "$WORK/models/Plates"
+cp "$WORK/models/cube.stl" "$WORK/models/Plates/a.stl"
+cp "$WORK/models/Pack/tetra.obj" "$WORK/models/Plates/b.obj"
+printf ';nothing useful\nG28\n' > "$WORK/models/Plates/batch_run.gcode"
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+
+PALADIN="$(api "$BASE/api/models?search=paladin" | jfirst id)"
+check "slice attached to its model" "$(api "$BASE/api/models/$PALADIN/slices" | jlen)" 1
+check "  counted on the model"      "$(api "$BASE/api/models/$PALADIN" | jfield slice_count)" 1
+check "  layer height parsed"       "$(api "$BASE/api/models/$PALADIN/slices" | jfirst layer_height)" "0.15"
+check "  print time parsed"         "$(api "$BASE/api/models/$PALADIN/slices" | jfirst print_time_secs)" 7985
+check "  material parsed"           "$(api "$BASE/api/models/$PALADIN/slices" | jfirst material_grams)" "12.34"
+check "  printer parsed"            "$(api "$BASE/api/models/$PALADIN/slices" | jfirst printer)" "MK4"
+check "  format recorded"           "$(api "$BASE/api/models/$PALADIN/slices" | jfirst format)" "gcode"
+
+# Two models, no name match: guessing would attach the wrong output.
+check "ambiguous slice left alone"  "$(api "$BASE/api/slices/unattached" | jlen)" 1
+ORPHAN="$(api "$BASE/api/slices/unattached" | jfirst id)"
+A_ID="$(api "$BASE/api/models?search=Plates/a" | jfirst id)"
+OWNER="$(printf '{"model_id":%s}' "$A_ID")"
+check "attaching by hand"           "$(post_code "$BASE/api/slices/$ORPHAN/owner" "$OWNER")" 204
+check "  no orphans left"           "$(api "$BASE/api/slices/unattached" | jlen)" 0
+check "  now on that model"         "$(api "$BASE/api/models/$A_ID/slices" | jlen)" 1
+
+SLICE_ID="$(api "$BASE/api/models/$PALADIN/slices" | jfirst id)"
+check "the sliced file downloads"   "$(api_code "$BASE/api/slices/$SLICE_ID/file")" 200
+check "  and is the gcode"          "$(api "$BASE/api/slices/$SLICE_ID/file" | head -c 7)" ";FLAVOR"
+
+# The payoff: a run that knows which file produced it.
+RUN="$(printf '{"outcome":"success","printer":"MK4","slice_id":%s}' "$SLICE_ID")"
+check "a run records its slice"     "$(post_code "$BASE/api/models/$PALADIN/prints" "$RUN")" 200
+check "  and reads back"            "$(api "$BASE/api/models/$PALADIN/prints" | jfirst slice_id)" "$SLICE_ID"
+
+check "detaching leaves the file"   "$(post_code "$BASE/api/slices/$ORPHAN/owner" '{}')" 204
+check "  back to unattached"        "$(api "$BASE/api/slices/unattached" | jlen)" 1
+
 echo "== organising files on disk (Pro) =="
 # Deliberately last: this is the only thing that moves the fixtures, so every
 # assertion above still describes where the files started.

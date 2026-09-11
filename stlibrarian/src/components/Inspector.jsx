@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import StlViewer from "./StlViewer.jsx";
 import PrintLog from "./PrintLog.jsx";
+import SlicesPanel from "./SlicesPanel.jsx";
 import ProvenancePanel from "./ProvenancePanel.jsx";
 import RenderPicker from "./RenderPicker.jsx";
 import { Alert, Button, CloseIcon, Field, Panel, TagChip, TrashIcon } from "./controls/index.jsx";
@@ -243,6 +244,8 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
       <ProvenancePanel api={api} model={model} onChanged={onChanged} />
 
       <RenderPicker api={api} model={model} onChanged={onChanged} />
+
+      <SlicesPanel api={api} model={model} onChanged={onChanged} />
 
       <PrintLog api={api} model={model} onChanged={onChanged} />
 

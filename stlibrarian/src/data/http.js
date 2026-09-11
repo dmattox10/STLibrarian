@@ -162,6 +162,17 @@ export function createHttpAdapter(baseUrl = "") {
 
     // The files live on the server, not on whatever machine is browsing, so
     // there is nothing here for a slicer to open.
+    slices: (modelId) => request(`/api/models/${modelId}/slices`),
+    orphanSlices: () => request("/api/slices/unattached"),
+    setSliceOwner: (sliceId, modelId, packageId = null) =>
+      request(`/api/slices/${sliceId}/owner`, {
+        method: "POST",
+        body: { model_id: modelId, package_id: packageId },
+      }),
+    // A browser cannot hand a file to a local slicer, but it can download one.
+    openSlice: null,
+    sliceFileUrl: (sliceId) => `${baseUrl}/api/slices/${sliceId}/file`,
+
     // Pro only: the files are on the server, so the server is the only thing
     // that can move them -- which is also why this exists here and nowhere else.
     organizePlan: (root) =>

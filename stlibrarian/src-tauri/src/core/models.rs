@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `Default` is derived so tests can state only the fields under test. Without
+/// it every new column breaks every hand-built fixture, which is how fields
+/// end up being added without anyone checking what they mean.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelRecord {
     pub id: i64,
     pub path: String,
@@ -31,6 +34,9 @@ pub struct ModelRecord {
     /// know when looking at a wall of models you half remember.
     pub print_count: i64,
     pub last_printed: Option<i64>,
+    /// How many sliced files are attached -- the printable outputs of this
+    /// model. Zero means it has never been through a slicer.
+    pub slice_count: i64,
     /// Every edge shared by exactly two triangles. When false, `volume` is
     /// not the volume of anything and the file may not slice.
     pub watertight: bool,
@@ -175,6 +181,10 @@ pub struct PrintRecord {
     pub notes: String,
     /// A photo of the result, if you took one.
     pub photo: Option<String>,
+    /// The sliced file that was actually run. This is what makes "print it
+    /// again exactly as it went last time" a thing you can do rather than
+    /// something you have to remember.
+    pub slice_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,4 +227,31 @@ pub struct NewPrint {
     pub outcome: String,
     pub notes: String,
     pub photo: Option<String>,
+    /// Which sliced file was run, when you know.
+    pub slice_id: Option<i64>,
+}
+
+/// A file a printer can actually run: the output of a slicer.
+///
+/// Kept because the reusable artifact in a workshop is not the model, it is
+/// "this model, sliced for that printer, at those settings, that we know
+/// works". A print record points at one, which is what makes running a job
+/// again exactly as it went last time possible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Slice {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub format: String,
+    pub size: i64,
+    pub mtime: i64,
+    /// Read out of the slicer's own comments where the format allows it. The
+    /// resin binaries are vendor formats and are left unparsed rather than
+    /// guessed at.
+    pub layer_height: Option<f64>,
+    pub print_time_secs: Option<i64>,
+    pub material_grams: Option<f64>,
+    pub printer: String,
+    pub model_id: Option<i64>,
+    pub package_id: Option<i64>,
 }
