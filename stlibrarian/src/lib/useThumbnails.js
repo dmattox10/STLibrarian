@@ -17,6 +17,9 @@ export function useThumbnails(api, models) {
   const [thumbs, setThumbs] = useState({});
   const known = useRef(new Set());
   const runId = useRef(0);
+  // Object URLs hold their blob until revoked. Over a long session of
+  // browsing a large library that is a slow leak of every preview ever shown.
+  const objectUrls = useRef([]);
 
   useEffect(() => {
     const mine = ++runId.current;
@@ -34,7 +37,10 @@ export function useThumbnails(api, models) {
         try {
           const url = await api.getThumbUrl(model.hash, model);
           if (cancelled || runId.current !== mine) return;
-          if (url) setThumbs((prev) => ({ ...prev, [model.hash]: url }));
+          if (url) {
+            if (url.startsWith("blob:")) objectUrls.current.push(url);
+            setThumbs((prev) => ({ ...prev, [model.hash]: url }));
+          }
         } catch {
           // A missing or unreadable file leaves the placeholder. The library
           // keeps working; the inspector reports the real error on click.
@@ -46,6 +52,16 @@ export function useThumbnails(api, models) {
       cancelled = true;
     };
   }, [api, models]);
+
+  // Released together on unmount rather than per-model: a preview stays on
+  // screen for as long as the grid does.
+  useEffect(
+    () => () => {
+      for (const url of objectUrls.current) URL.revokeObjectURL(url);
+      objectUrls.current = [];
+    },
+    []
+  );
 
   return thumbs;
 }

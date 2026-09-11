@@ -71,6 +71,8 @@ export function createTauriAdapter() {
     orphanSlices: () => invoke("orphan_slices"),
     setSliceOwner: (sliceId, modelId, packageId = null) =>
       invoke("set_slice_owner", { sliceId, modelId, packageId }),
+    // The slice object is only needed by the remote adapter, which has to
+    // name a download; locally the id is enough.
     openSlice: (sliceId) => invoke("open_slice", { sliceId }),
 
     // Deliberately absent on the desktop: rearranging a collection is the

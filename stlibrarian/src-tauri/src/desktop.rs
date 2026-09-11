@@ -447,6 +447,8 @@ pub fn run() {
             orphan_slices,
             set_slice_owner,
             open_slice,
+            open_remote,
+            clear_remote_cache,
             set_provenance,
             creators,
             get_thumb,
@@ -459,4 +461,152 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
+}
+
+// ------------------------------------------------------- remote libraries ----
+
+/// Where files fetched from a remote library are kept.
+///
+/// A cache, not a library: these are copies of somebody else's server and are
+/// safe to delete at any time.
+fn remote_cache() -> std::path::PathBuf {
+    paths::data_dir().join("remote-cache")
+}
+
+/// Reduce a filename from a remote server to one harmless path segment.
+///
+/// It arrives over the network and becomes a path here, so the same rule as
+/// the organiser applies: separators and dot-only names cannot survive, and
+/// containment is guaranteed by construction rather than by a later check.
+fn safe_download_name(raw: &str) -> Option<String> {
+    let mapped: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' => '-',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = mapped.trim();
+    if trimmed.chars().all(|c| c == '.') {
+        return None;
+    }
+    let limited: String = trimmed.chars().take(120).collect();
+    let limited = limited.trim().to_string();
+    if limited.is_empty() {
+        None
+    } else {
+        Some(limited)
+    }
+}
+
+/// Download a file from a remote library into the cache and return its path.
+fn fetch_to_cache(url: &str, token: Option<&str>, filename: &str) -> Result<std::path::PathBuf, String> {
+    let safe = safe_download_name(filename).ok_or("That file has no usable name")?;
+    let target = remote_cache().join(&safe);
+    std::fs::create_dir_all(remote_cache()).map_err(|e| e.to_string())?;
+
+    let mut request = ureq::get(url);
+    if let Some(token) = token.filter(|t| !t.is_empty()) {
+        request = request.set("Authorization", &format!("Bearer {}", token));
+    }
+    let response = request
+        .call()
+        .map_err(|e| format!("Could not reach the library: {}", e))?;
+
+    let mut reader = response.into_reader();
+    let mut file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+    // Streamed: the whole point of doing this in Rust is not holding the file.
+    std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
+/// Fetch a file from a remote library and open it with whatever handles it.
+///
+/// This is the entire reason a desktop client connected to a remote server is
+/// worth having. A browser can offer a download; it cannot put the file into
+/// Lychee on this machine. The download happens in Rust because these run to
+/// hundreds of megabytes and the webview should never hold one.
+#[command]
+async fn open_remote(
+    app: tauri::AppHandle,
+    url: String,
+    token: Option<String>,
+    filename: String,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let target = tauri::async_runtime::spawn_blocking(move || {
+        fetch_to_cache(&url, token.as_deref(), &filename)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    app.opener()
+        .open_path(target.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| format!("Could not open it: {}", e))
+}
+
+/// Throw away everything fetched from remote libraries.
+#[command]
+fn clear_remote_cache() -> Result<u64, String> {
+    let dir = remote_cache();
+    let mut freed = 0u64;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    freed += meta.len();
+                }
+            }
+        }
+    }
+    Ok(freed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A filename arriving from someone else's server becomes a path on this
+    /// machine, so it gets the same treatment as anything else that does.
+    #[test]
+    fn a_remote_filename_cannot_escape_the_cache() {
+        for hostile in ["../../etc/passwd", "..", ".", "/etc/passwd", "a/b/c", "C:\\Windows\\x"] {
+            match safe_download_name(hostile) {
+                None => {}
+                Some(name) => {
+                    assert!(!name.contains('/'), "{} -> {}", hostile, name);
+                    assert!(!name.contains('\\'), "{} -> {}", hostile, name);
+                    assert_ne!(name, "..", "{}", hostile);
+                    let joined = std::path::Path::new("/cache").join(&name);
+                    assert!(
+                        !joined.components().any(|c| c.as_os_str() == ".."),
+                        "{} -> {:?}",
+                        hostile,
+                        joined
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_filenames_survive_intact() {
+        assert_eq!(
+            safe_download_name("Throk_Body_130mm.stl").as_deref(),
+            Some("Throk_Body_130mm.stl")
+        );
+        assert_eq!(
+            safe_download_name("plate v2 (final).ctb").as_deref(),
+            Some("plate v2 (final).ctb")
+        );
+    }
+
+    #[test]
+    fn a_nameless_download_is_refused() {
+        assert_eq!(safe_download_name(""), None);
+        assert_eq!(safe_download_name("   "), None);
+        assert_eq!(safe_download_name("..."), None);
+    }
 }

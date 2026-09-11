@@ -5,6 +5,7 @@ import PackagesPanel from "./PackagesPanel.jsx";
 import DuplicatesPanel from "./DuplicatesPanel.jsx";
 import OrganizePanel from "./OrganizePanel.jsx";
 import UsersPanel from "./UsersPanel.jsx";
+import ServerPanel from "./ServerPanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -49,7 +50,9 @@ function ScanPanel({ api, onComplete }) {
         <Field icon={<FolderIcon />}>
           <input
             value={path}
-            placeholder={api.mode === "http" ? "/volume1/3dprints" : "Folder to scan"}
+            placeholder={
+              api.mode === "tauri" ? "Folder to scan" : "/volume1/3dprints"
+            }
             onChange={(e) => setPath(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && run()}
             aria-label="Folder to scan"
@@ -85,7 +88,7 @@ function ScanPanel({ api, onComplete }) {
 
         <Alert>{error}</Alert>
 
-        {api.mode === "http" ? (
+        {api.mode !== "tauri" ? (
           <span className="dim" style={{ fontSize: 11, lineHeight: 1.5 }}>
             Paths are read on the server, not on this computer.
           </span>
@@ -118,6 +121,8 @@ export default function Sidebar({
 }) {
   return (
     <>
+      <ServerPanel />
+
       {canScan ? <ScanPanel api={api} onComplete={onRefresh} /> : null}
 
       <PackagesPanel

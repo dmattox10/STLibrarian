@@ -76,7 +76,7 @@ export default function SlicesPanel({ api, model, onChanged }) {
               {api.openSlice ? (
                 <Button
                   size="sm"
-                  onClick={() => api.openSlice(s.id).catch((e) => setError(e?.message))}
+                  onClick={() => api.openSlice(s.id, s).catch((e) => setError(e?.message))}
                   title="Open with whatever handles this format"
                 >
                   Open

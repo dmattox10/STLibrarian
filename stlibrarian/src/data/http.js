@@ -204,10 +204,23 @@ export function createHttpAdapter(baseUrl = "") {
 
     // The server sets a long immutable cache header, and the URL is keyed by
     // content hash, so the browser only ever fetches each preview once.
+    /**
+     * Fetch the preview and hand back an object URL.
+     *
+     * Not the plain endpoint: an `<img src>` cannot send an Authorization
+     * header, so pointing one at /api/thumb produced a broken image for every
+     * card. The obvious alternative -- putting the session token in the query
+     * string -- leaks it into access logs and referrers for the sake of a
+     * picture, so the bytes are fetched properly and wrapped instead.
+     *
+     * The caller owns the returned URL and must revoke it.
+     */
     async getThumbUrl(hash) {
-      // Always a URL: the server rasterises on first request and caches by
-      // content hash, so there is nothing to wait for it to have already done.
-      return `${baseUrl}/api/thumb/${hash}`;
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(`${baseUrl}/api/thumb/${hash}`, { headers });
+      if (!res.ok) return null;
+      return URL.createObjectURL(await res.blob());
     },
     putThumb: (hash, dataUrl) =>
       request(`/api/thumb/${hash}`, { method: "PUT", body: { data_url: dataUrl } }),

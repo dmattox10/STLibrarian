@@ -119,7 +119,8 @@ never have, which is the question a pile of downloads cannot answer.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --no-default-features --lib   # core: 130 tests
+cd src-tauri && cargo test --lib                         # everything: 133 tests
+cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
 tools/e2e.sh                                             # server + API: 159 checks
 ```
 
@@ -205,6 +206,17 @@ Only text gcode is parsed. The resin formats are vendor binaries with versioned
 and sometimes obfuscated headers; guessing at those would produce confident
 wrong numbers, which is worse than none, so a `.ctb` shows its size and nothing
 it has not earned.
+
+## Pointing the desktop app at a server
+
+The desktop client can read a remote library instead of its own disk. There is
+exactly one reason to do that rather than opening the web UI: a browser can
+offer you a download, but it cannot put the file into your slicer. Connected to
+a server, the desktop client still can -- it fetches the file in Rust, caches
+it, and hands it to whatever opens that format here.
+
+That is the shape a workshop actually has: the library on a NAS, the printers
+and slicers at workstations.
 
 ## Pro: people
 
