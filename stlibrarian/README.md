@@ -181,10 +181,10 @@ the old one, so its triangle count and volume describe what is actually there.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --lib                         # everything: 143 tests
+cd src-tauri && cargo test --lib                         # everything: 149 tests
 cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
 tools/e2e.sh                                             # server + API: 179 checks
-tools/remote-client.sh                                   # over a network: 29 checks
+tools/remote-client.sh                                   # over a network: 42 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
@@ -286,6 +286,16 @@ it, and hands it to whatever opens that format here.
 
 That is the shape a workshop actually has: the library on a NAS, the printers
 and slicers at workstations.
+
+The download resumes. A model is hundreds of megabytes and the machine asking
+is a laptop on workshop wifi, so a transfer that starts again from zero every
+time the connection drops is a transfer that never finishes. The partial file
+is kept with the `Last-Modified` it was fetched against, and the resume sends
+that back as `If-Range`: if the model was re-exported in the meantime the
+server sends the whole thing instead of the rest of a different file, and the
+old bytes are discarded rather than spliced onto new ones. The file only
+appears under its real name once it is complete, so a half-downloaded model
+can never reach a slicer.
 
 ## Pro: people
 

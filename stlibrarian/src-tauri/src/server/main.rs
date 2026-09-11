@@ -25,7 +25,7 @@ use stlibrarian_lib::core::models::{
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
 use stlibrarian_lib::core::{auth, db, organize, paths, relink, scanner, stl, thumbs};
 use rust_embed::{Embed, EmbeddedFile};
-use tokio_util::io::ReaderStream;
+use tower::ServiceExt;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -303,37 +303,108 @@ async fn get_model_route(Path(id): Path<i64>) -> Result<Json<ModelRecord>, ApiEr
 ///
 /// Addressed by id, so only indexed files are reachable -- a path in the URL
 /// would let any signed-in user read arbitrary files off the server.
-async fn model_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
+/// What a mesh file actually is, from its extension.
+///
+/// The library holds `.obj` and `.3mf` as well as `.stl`, and labelling all
+/// three `model/stl` is simply wrong. mime_guess does not know these, so the
+/// three the scanner accepts are named here and anything else falls back.
+fn model_mime(path: &std::path::Path) -> mime_guess::mime::Mime {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let literal = match ext.as_str() {
+        "stl" => "model/stl",
+        "obj" => "model/obj",
+        "3mf" => "model/3mf",
+        _ => return mime_guess::from_path(path).first_or_octet_stream(),
+    };
+    literal
+        .parse()
+        .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM)
+}
+
+/// Send a file from disk, with range requests, to a client that has already
+/// been authenticated and had its id looked up.
+///
+/// This is `tower_http`'s `ServeFile` rather than a hand-rolled stream, for
+/// two reasons that both cost real bytes when they go wrong:
+///
+///   * Ranges. A model runs to hundreds of megabytes and the client is often
+///     a workshop laptop on wifi. Without `Range`, every interruption starts
+///     the transfer again from zero. Getting ranges right means suffix ranges,
+///     unsatisfiable ranges, `If-Range` and `HEAD` -- all of which this
+///     already does, correctly, and none of which is interesting to write.
+///   * `Content-Length` comes from the file being opened, so it cannot
+///     disagree with the body. The previous code took it from the size the
+///     last scan recorded: re-export or repair a mesh without rescanning and a
+///     grown file arrived silently truncated under a 200 -- a corrupt STL
+///     handed straight to a slicer -- while a shrunk one hung the transfer on
+///     bytes that were never coming.
+async fn serve_file(
+    path: &std::path::Path,
+    mime: mime_guess::mime::Mime,
+    mut req: Request,
+) -> Result<Response, ApiError> {
+    // Asked before delegating so that a missing file is the API's own JSON
+    // error, like every other 404 here, rather than ServeFile's empty one.
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
+
+    enforce_if_range(&mut req, &meta);
+
+    let response = ServeFile::new_with_mime(path, &mime)
+        .oneshot(req)
+        .await
+        .map_err(|e| server_error(e.to_string()))?;
+
+    Ok(response.map(Body::new).into_response())
+}
+
+/// Honour `If-Range`, which `ServeFile` does not.
+///
+/// `ServeFile` applies a `Range` whether or not the validator the client sent
+/// still describes the file. That was harmless while nothing here advertised
+/// `Accept-Ranges` and no client tried to resume. Now that one does, it is a
+/// silent corruption: a download interrupted, the model re-exported, the
+/// download resumed, and the second half of a new file is appended to the
+/// first half of an old one under a 206 that says everything is fine. The
+/// file is then wrong in a way nothing checks until a printer does.
+///
+/// Dropping the `Range` makes `ServeFile` send the whole file, which is
+/// exactly what `If-Range` asks for when the validator no longer matches.
+///
+/// The comparison is a string match against the `Last-Modified` we would send
+/// for this file. Anything else -- an entity tag, a date written differently,
+/// a clock that moved -- fails to match and costs a full re-send. That is the
+/// right direction to be wrong in.
+fn enforce_if_range(req: &mut Request, meta: &std::fs::Metadata) {
+    let Some(sent) = req
+        .headers()
+        .get(header::IF_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+    else {
+        return;
+    };
+
+    let current = meta.modified().ok().map(httpdate::fmt_http_date);
+    if current.as_deref() != Some(sent.as_str()) {
+        req.headers_mut().remove(header::RANGE);
+    }
+}
+
+async fn model_file_route(Path(id): Path<i64>, req: Request) -> Result<Response, ApiError> {
     let record = with_db(move |conn| db::get_model(conn, id).map_err(|e| e.to_string()))
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "No such model".into()))?;
 
-    let file = tokio::fs::File::open(&record.path)
-        .await
-        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
-
-    // The length must come from the file we are about to send, not from
-    // `record.size`, which is whatever the last scan saw. Those disagree the
-    // moment someone re-exports or repairs a mesh without rescanning, and the
-    // client believes the header: a grown file arrives silently truncated
-    // under a 200 -- a corrupt STL handed straight to a slicer -- and a shrunk
-    // one leaves the transfer hanging on bytes that will never come.
-    let size = file
-        .metadata()
-        .await
-        .map(|m| m.len())
-        .unwrap_or(record.size as u64);
-
-    // Streamed, not read into memory: these run to hundreds of megabytes.
-    let body = Body::from_stream(ReaderStream::new(file));
-    Ok((
-        [
-            (header::CONTENT_TYPE, "model/stl".to_string()),
-            (header::CONTENT_LENGTH, size.to_string()),
-        ],
-        body,
-    )
-        .into_response())
+    let path = std::path::PathBuf::from(&record.path);
+    let mime = model_mime(&path);
+    serve_file(&path, mime, req).await
 }
 
 #[derive(Deserialize)]
@@ -813,7 +884,7 @@ async fn set_slice_owner_route(
 
 /// Download the sliced file itself -- which is how a desktop client connected
 /// to a remote server can hand it to a local slicer.
-async fn slice_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
+async fn slice_file_route(Path(id): Path<i64>, req: Request) -> Result<Response, ApiError> {
     let path = with_db(move |conn| {
         conn.query_row(
             "SELECT path FROM slices WHERE id = ?1",
@@ -824,25 +895,34 @@ async fn slice_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
     })
     .await?;
 
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
-    let name = std::path::Path::new(&path)
+    let path = std::path::PathBuf::from(&path);
+    let name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "slice".into());
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", name),
-            ),
-        ],
-        Body::from_stream(ReaderStream::new(file)),
+    // Ranged and correctly measured, like a model. Gcode for a full plate is
+    // not small, and a slicer's output is the file you least want to fetch
+    // twice.
+    let mut response = serve_file(
+        &path,
+        mime_guess::mime::APPLICATION_OCTET_STREAM,
+        req,
     )
-        .into_response())
+    .await?;
+
+    // ServeFile does not name the download; without this the browser saves it
+    // as the numeric route segment.
+    if let Ok(value) = header::HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        name.replace('"', "")
+    )) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+
+    Ok(response)
 }
 
 // ---------------------------------------------------------------- prints ----

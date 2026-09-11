@@ -163,6 +163,10 @@ proxy, two settings matter more than the rest:
 - **No upload or response size limit.** Models run to hundreds of megabytes and
   are streamed; a proxy buffering them into memory or capping the body will
   break downloads for exactly the largest files people care about.
+- **Leave `Range` requests alone.** Model and slice downloads are resumable,
+  which is what makes a large model reachable over workshop wifi at all. A
+  proxy that buffers the response, or strips `Accept-Ranges`, turns every
+  dropped connection back into a download that starts from zero.
 - **A generous read timeout.** Scanning a large share and rendering previews
   are slow on purpose. 300s is a reasonable ceiling.
 
@@ -175,10 +179,12 @@ location / {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Range $http_range;      # keep resumable downloads working
+    proxy_set_header If-Range $http_if_range;
 
     client_max_body_size 0;      # models are large
     proxy_request_buffering off; # stream, do not spool to disk
-    proxy_buffering off;
+    proxy_buffering off;         # also required for Range to survive
     proxy_read_timeout 300s;
 }
 ```

@@ -557,24 +557,138 @@ fn safe_download_name(raw: &str) -> Option<String> {
 }
 
 /// Download a file from a remote library into the cache and return its path.
+///
+/// Resumable. These run to hundreds of megabytes and the machine asking is a
+/// workshop laptop on wifi, so an interrupted transfer that starts again from
+/// zero is the difference between a slow download and one that never finishes.
+///
+/// The partial download lives at `<name>.part`, with the `Last-Modified` the
+/// server gave for it in `<name>.part-lastmod`. A resume sends that back as
+/// `If-Range`: if the model was re-exported while we were away the server
+/// sends the whole file instead of the rest of a different one, and the bytes
+/// already on disk are replaced rather than spliced onto new ones. Without a
+/// stored validator there is no safe resume, so it starts again -- which is
+/// the direction to be wrong in.
+///
+/// The file only appears under its real name once it is complete, so a
+/// half-downloaded model can never be handed to a slicer.
 fn fetch_to_cache(url: &str, token: Option<&str>, filename: &str) -> Result<std::path::PathBuf, String> {
-    let safe = safe_download_name(filename).ok_or("That file has no usable name")?;
-    let target = remote_cache().join(&safe);
-    std::fs::create_dir_all(remote_cache()).map_err(|e| e.to_string())?;
+    fetch_into(&remote_cache(), url, token, filename)
+}
 
+/// The above, with the directory named rather than assumed, so it can be
+/// pointed at a scratch directory in a test.
+fn fetch_into(
+    dir: &std::path::Path,
+    url: &str,
+    token: Option<&str>,
+    filename: &str,
+) -> Result<std::path::PathBuf, String> {
+    let safe = safe_download_name(filename).ok_or("That file has no usable name")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+
+    let target = dir.join(&safe);
+    let part = dir.join(format!("{}.part", safe));
+    let stamp = dir.join(format!("{}.part-lastmod", safe));
+
+    // Both, or neither. Bytes without the validator they were fetched against
+    // are bytes we cannot prove belong to this version of the file.
+    let resume = std::fs::metadata(&part)
+        .map(|meta| meta.len())
+        .ok()
+        .filter(|len| *len > 0)
+        .zip(std::fs::read_to_string(&stamp).ok())
+        .map(|(len, validator)| (len, validator.trim().to_string()));
+
+    let mut attempt = resume;
+    loop {
+        let resuming = attempt.is_some();
+        let result = fetch_once(
+            url,
+            token,
+            &part,
+            &stamp,
+            attempt.as_ref().map(|(len, v)| (*len, v.as_str())),
+        );
+
+        match result {
+            Ok(()) => {
+                // Renamed last: until this, nothing can mistake a partial
+                // download for the model.
+                std::fs::rename(&part, &target).map_err(|e| e.to_string())?;
+                std::fs::remove_file(&stamp).ok();
+                return Ok(target);
+            }
+            Err(e) => {
+                std::fs::remove_file(&part).ok();
+                std::fs::remove_file(&stamp).ok();
+                // A resume can fail for reasons a clean request would not: a
+                // .part the file has since outgrown gets a 416, and a server
+                // that does not do ranges may refuse outright. Neither should
+                // leave someone unable to open their model, so try once more
+                // from the beginning. A plain request that failed has nothing
+                // left to try.
+                if !resuming {
+                    return Err(e);
+                }
+                attempt = None;
+            }
+        }
+    }
+}
+
+/// One request for a file, appending to `part` when the server picks up where
+/// we left off and replacing it when it does not.
+fn fetch_once(
+    url: &str,
+    token: Option<&str>,
+    part: &std::path::Path,
+    stamp: &std::path::Path,
+    resume: Option<(u64, &str)>,
+) -> Result<(), String> {
     let mut request = ureq::get(url);
     if let Some(token) = token.filter(|t| !t.is_empty()) {
         request = request.set("Authorization", &format!("Bearer {}", token));
     }
+    if let Some((have, validator)) = resume {
+        request = request
+            .set("Range", &format!("bytes={}-", have))
+            .set("If-Range", validator);
+    }
+
     let response = request
         .call()
         .map_err(|e| format!("Could not reach the library: {}", e))?;
 
+    // 206 is the only answer that means "carry on". A 200 -- what the server
+    // sends when the If-Range no longer matches -- means the file changed
+    // underneath us, and whatever is already on disk describes something else.
+    let appending = response.status() == 206;
+    let modified = response.header("Last-Modified").map(|v| v.to_string());
+
+    let mut file = if appending {
+        std::fs::OpenOptions::new().append(true).open(part)
+    } else {
+        std::fs::File::create(part)
+    }
+    .map_err(|e| e.to_string())?;
+
+    // Written before the body, so an interrupted transfer still knows what it
+    // was fetching. A server that sends no validator leaves nothing to resume
+    // against, and the next attempt starts over.
+    match &modified {
+        Some(value) => {
+            std::fs::write(stamp, value).ok();
+        }
+        None => {
+            std::fs::remove_file(stamp).ok();
+        }
+    }
+
     let mut reader = response.into_reader();
-    let mut file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
     // Streamed: the whole point of doing this in Rust is not holding the file.
     std::io::copy(&mut reader, &mut file).map_err(|e| e.to_string())?;
-    Ok(target)
+    Ok(())
 }
 
 /// Fetch a file from a remote library and open it with whatever handles it.
@@ -664,5 +778,189 @@ mod tests {
         assert_eq!(safe_download_name(""), None);
         assert_eq!(safe_download_name("   "), None);
         assert_eq!(safe_download_name("..."), None);
+    }
+}
+
+
+/// The resumable download, checked against a server that answers exactly what
+/// each case is about.
+///
+/// Deliberately a scripted stub rather than a real range server: what matters
+/// here is how the client reacts to each answer, and in particular that a 200
+/// replaces the partial file instead of appending to it. The real server's
+/// range handling -- 206, suffix ranges, 416, If-Range -- is covered end to
+/// end by tools/remote-client.sh.
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Mutex};
+
+    const LM: &str = "Wed, 21 Oct 2026 07:28:00 GMT";
+    const LM_NEWER: &str = "Thu, 22 Oct 2026 09:00:00 GMT";
+
+    /// Answers each request with the next reply in the list and records the
+    /// request head, so a test can assert what was actually asked for.
+    fn scripted(replies: Vec<(u16, Option<&'static str>, &'static [u8])>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+
+        std::thread::spawn(move || {
+            for (status, modified, body) in replies {
+                let Ok((mut sock, _)) = listener.accept() else { return };
+
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) if line == "\r\n" => break,
+                        Ok(_) => head.push_str(&line),
+                        Err(_) => break,
+                    }
+                }
+                log.lock().unwrap().push(head);
+
+                let reason = match status {
+                    206 => "Partial Content",
+                    416 => "Range Not Satisfiable",
+                    _ => "OK",
+                };
+                let mut response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n",
+                    status,
+                    reason,
+                    body.len()
+                );
+                if let Some(value) = modified {
+                    response.push_str(&format!("Last-Modified: {}\r\n", value));
+                }
+                response.push_str("Connection: close\r\n\r\n");
+                let _ = sock.write_all(response.as_bytes());
+                let _ = sock.write_all(body);
+                let _ = sock.flush();
+            }
+        });
+
+        (url, seen)
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stlib_dl_{}_{}_{}",
+            std::process::id(),
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_fresh_download_keeps_the_validator_it_will_need_to_resume() {
+        let dir = scratch("fresh");
+        let (url, seen) = scripted(vec![(200, Some(LM), b"HELLOWORLD")]);
+
+        let target = fetch_into(&dir, &url, None, "body.stl").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"HELLOWORLD");
+        // Complete, so the working files are gone and only the model is left.
+        assert!(!dir.join("body.stl.part").exists());
+        assert!(!dir.join("body.stl.part-lastmod").exists());
+
+        let head = seen.lock().unwrap()[0].clone();
+        assert!(!head.contains("Range:"), "asked for a range on a fresh download:\n{}", head);
+    }
+
+    #[test]
+    fn a_resume_asks_for_the_rest_and_appends_it() {
+        let dir = scratch("resume");
+        std::fs::write(dir.join("body.stl.part"), b"HELLO").unwrap();
+        std::fs::write(dir.join("body.stl.part-lastmod"), LM).unwrap();
+
+        let (url, seen) = scripted(vec![(206, Some(LM), b"WORLD")]);
+        let target = fetch_into(&dir, &url, None, "body.stl").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"HELLOWORLD");
+
+        let head = seen.lock().unwrap()[0].clone();
+        assert!(head.contains("Range: bytes=5-"), "no range asked for:\n{}", head);
+        assert!(head.contains(&format!("If-Range: {}", LM)), "no validator sent:\n{}", head);
+    }
+
+    /// The case the whole design exists for. The model was re-exported while
+    /// the download was interrupted; the server answers 200 rather than 206;
+    /// the bytes already on disk describe the old file and must be thrown
+    /// away, not prepended to the new one.
+    #[test]
+    fn a_changed_file_replaces_the_partial_instead_of_splicing_onto_it() {
+        let dir = scratch("changed");
+        std::fs::write(dir.join("body.stl.part"), b"OLDOLDOLD").unwrap();
+        std::fs::write(dir.join("body.stl.part-lastmod"), LM).unwrap();
+
+        let (url, _seen) = scripted(vec![(200, Some(LM_NEWER), b"NEWFILE")]);
+        let target = fetch_into(&dir, &url, None, "body.stl").unwrap();
+
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"NEWFILE",
+            "the old partial bytes survived into the finished file"
+        );
+    }
+
+    /// Bytes with no validator beside them cannot be proven to belong to this
+    /// version of the file, so they are not resumed from.
+    #[test]
+    fn a_partial_with_no_validator_starts_again() {
+        let dir = scratch("novalidator");
+        std::fs::write(dir.join("body.stl.part"), b"ORPHANED").unwrap();
+
+        let (url, seen) = scripted(vec![(200, Some(LM), b"WHOLE")]);
+        let target = fetch_into(&dir, &url, None, "body.stl").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"WHOLE");
+        let head = seen.lock().unwrap()[0].clone();
+        assert!(!head.contains("Range:"), "resumed without a validator:\n{}", head);
+    }
+
+    /// A .part the file has since outgrown gets a 416, and a server with no
+    /// range support may refuse outright. Neither may leave someone unable to
+    /// open their model.
+    #[test]
+    fn a_refused_resume_falls_back_to_the_whole_file() {
+        let dir = scratch("refused");
+        std::fs::write(dir.join("body.stl.part"), b"STALEBYTES").unwrap();
+        std::fs::write(dir.join("body.stl.part-lastmod"), LM).unwrap();
+
+        let (url, seen) = scripted(vec![
+            (416, Some(LM), b""),
+            (200, Some(LM_NEWER), b"WHOLEFILE"),
+        ]);
+        let target = fetch_into(&dir, &url, None, "body.stl").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"WHOLEFILE");
+        assert_eq!(seen.lock().unwrap().len(), 2, "did not retry after the refusal");
+    }
+
+    /// A server that offers no validator leaves nothing to resume against, so
+    /// nothing is kept that would invite one.
+    #[test]
+    fn no_validator_from_the_server_means_no_stamp_left_behind() {
+        let dir = scratch("nostamp");
+        let part = dir.join("body.stl.part");
+        let stamp = dir.join("body.stl.part-lastmod");
+        std::fs::write(&stamp, LM).unwrap();
+
+        let (url, _seen) = scripted(vec![(200, None, b"ANON")]);
+        fetch_once(&url, None, &part, &stamp, None).unwrap();
+
+        assert!(!stamp.exists(), "kept a validator the server never gave");
+        assert_eq!(std::fs::read(&part).unwrap(), b"ANON");
     }
 }
