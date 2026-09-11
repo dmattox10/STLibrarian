@@ -1,4 +1,6 @@
-use crate::core::models::{Collection, LibraryQuery, ModelRecord, TagCount};
+use crate::core::models::{
+    Collection, DuplicateGroup, LibraryQuery, ModelRecord, Package, PackageSuggestion, TagCount,
+};
 use log::error;
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::collections::HashMap;
@@ -59,6 +61,12 @@ fn migrate(conn: &Connection) -> Result<()> {
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS packages (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL,
+            root       TEXT,
+            created_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS collections (
             id         INTEGER PRIMARY KEY,
             name       TEXT UNIQUE NOT NULL COLLATE NOCASE,
@@ -90,6 +98,14 @@ fn migrate(conn: &Connection) -> Result<()> {
         ("mtime", "INTEGER NOT NULL DEFAULT 0"),
         ("has_thumb", "INTEGER NOT NULL DEFAULT 0"),
         ("volume", "REAL NOT NULL DEFAULT 0"),
+        // Provenance is guessed from the path at scan time and freely
+        // editable afterwards. A guess you can correct beats a blank field
+        // that never gets filled in.
+        ("creator", "TEXT NOT NULL DEFAULT ''"),
+        ("source", "TEXT NOT NULL DEFAULT ''"),
+        // Nullable on purpose: a file belongs to a package only if someone
+        // decided it does. Scanning never assumes a folder is one model.
+        ("package_id", "INTEGER"),
     ] {
         if !has_column(conn, "models", column) {
             conn.execute_batch(&format!(
@@ -108,6 +124,8 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_coll_models_coll ON collection_models(collection_id);
         CREATE INDEX IF NOT EXISTS idx_coll_models_model ON collection_models(model_id);
+        CREATE INDEX IF NOT EXISTS idx_models_package ON models(package_id);
+        CREATE INDEX IF NOT EXISTS idx_models_creator ON models(creator);
         ",
     )?;
     Ok(())
@@ -132,6 +150,7 @@ pub fn upsert_model(
     dims: [f64; 3],
     volume: f64,
     mtime: i64,
+    provenance: (&str, &str),
 ) -> Result<(i64, Upsert)> {
     let existing: Option<(i64, String, i64)> = conn
         .query_row(
@@ -146,6 +165,8 @@ pub fn upsert_model(
             return Ok((id, Upsert::Unchanged));
         }
         conn.execute(
+            // Provenance is not overwritten on rescan: it may have been
+            // corrected by hand since, and a guess must not clobber that.
             "UPDATE models SET name=?2, size=?3, hash=?4, triangles=?5,
                     dim_x=?6, dim_y=?7, dim_z=?8, mtime=?9, volume=?10
              WHERE id=?1",
@@ -155,16 +176,21 @@ pub fn upsert_model(
     }
 
     conn.execute(
-        "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, volume)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume],
+        "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime,
+                             volume, creator, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume,
+            provenance.0, provenance.1
+        ],
     )?;
     Ok((conn.last_insert_rowid(), Upsert::Added))
 }
 
 pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecord>> {
     let mut sql = String::from(
-        "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb, volume
+        "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
+                volume, creator, source, package_id
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -202,6 +228,16 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
         binds.push(Box::new(collection_id));
     }
 
+    if let Some(creator) = q.creator.as_ref().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+        sql.push_str(" AND creator = ?");
+        binds.push(Box::new(creator.to_string()));
+    }
+
+    if let Some(package_id) = q.package {
+        sql.push_str(" AND package_id = ?");
+        binds.push(Box::new(package_id));
+    }
+
     // Whitelisted, because this goes into the SQL string.
     sql.push_str(match q.sort.as_deref() {
         Some("name") => " ORDER BY name COLLATE NOCASE ASC",
@@ -234,6 +270,9 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             mtime: row.get(9)?,
             has_thumb: row.get::<_, i64>(10)? != 0,
             volume: row.get(11)?,
+            creator: row.get(12)?,
+            source: row.get(13)?,
+            package_id: row.get(14)?,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -285,7 +324,8 @@ fn attach_tags(conn: &Connection, models: &mut [ModelRecord]) -> Result<()> {
 pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
     let found: Option<ModelRecord> = conn
         .query_row(
-            "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb, volume
+            "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
+                    volume, creator, source, package_id
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -302,6 +342,9 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     mtime: row.get(9)?,
                     has_thumb: row.get::<_, i64>(10)? != 0,
                     volume: row.get(11)?,
+                    creator: row.get(12)?,
+                    source: row.get(13)?,
+                    package_id: row.get(14)?,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -687,6 +730,7 @@ mod tests {
             [10.0, 20.0, 30.0],
             6000.0,
             1000,
+            ("", ""),
         )
         .unwrap()
         .0
@@ -696,6 +740,201 @@ mod tests {
         let mut out: Vec<String> = list_models(conn, q).unwrap().into_iter().map(|m| m.name).collect();
         out.sort();
         out
+    }
+
+    fn model_at(conn: &Connection, path: &str, size: i64, hash: &str) -> i64 {
+        let name = std::path::Path::new(path)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        upsert_model(
+            conn, path, &name, size, hash, 12, [1.0, 2.0, 3.0], 100.0, 1000, ("", ""),
+        )
+        .unwrap()
+        .0
+    }
+
+    // ------------------------------------------------------- packages ----
+
+    /// Four parts under a variant folder are one model; the lone file is not.
+    #[test]
+    fn suggestions_group_parts_and_leave_single_files_alone() {
+        let conn = db();
+        model_at(&conn, "/lib/Creator/Queen Bee.stl", 10, "a");
+        for part in ["Body", "ARM", "LWing", "RWing"] {
+            model_at(
+                &conn,
+                &format!("/lib/Gods/Throk_130mm/Throk_130mm_Unsupported/Throk_{}.stl", part),
+                10,
+                part,
+            );
+        }
+
+        let suggestions = suggest_packages(&conn).unwrap();
+        assert_eq!(suggestions.len(), 1, "got {:?}", suggestions);
+        assert_eq!(suggestions[0].parts, 4);
+        // Unsupported/ collapsed away, so the package is named for the model.
+        assert_eq!(suggestions[0].name, "Throk 130mm");
+    }
+
+    /// Supported and unsupported copies of one model are one model.
+    /// A file manager's duplicate folder is still the same model.
+    #[test]
+    fn a_duplicated_variant_folder_still_names_the_model() {
+        let conn = db();
+        model_at(&conn, "/lib/T/Throk_130mm_Unsupported 2/a.stl", 10, "a");
+        model_at(&conn, "/lib/T/Throk_130mm_Unsupported 2/b.stl", 10, "b");
+        let s = suggest_packages(&conn).unwrap();
+        assert_eq!(s[0].name, "Throk 130mm", "got {:?}", s[0].name);
+    }
+
+    /// But a model genuinely called "Dragon 2" keeps its number.
+    #[test]
+    fn a_trailing_number_that_is_part_of_the_name_is_kept() {
+        let conn = db();
+        model_at(&conn, "/lib/Dragon 2/a.stl", 10, "a");
+        model_at(&conn, "/lib/Dragon 2/b.stl", 10, "b");
+        let s = suggest_packages(&conn).unwrap();
+        assert_eq!(s[0].name, "Dragon 2", "got {:?}", s[0].name);
+    }
+
+    #[test]
+    fn variant_folders_collapse_into_the_same_suggestion() {
+        let conn = db();
+        model_at(&conn, "/lib/Dragon/Supported/wing.stl", 10, "a");
+        model_at(&conn, "/lib/Dragon/Unsupported/wing.stl", 10, "b");
+        model_at(&conn, "/lib/Dragon/Presupported/body.stl", 10, "c");
+
+        let s = suggest_packages(&conn).unwrap();
+        assert_eq!(s.len(), 1, "got {:?}", s);
+        assert_eq!(s[0].parts, 3);
+        assert_eq!(s[0].name, "Dragon");
+    }
+
+    #[test]
+    fn numeric_folders_collapse_too() {
+        let conn = db();
+        model_at(&conn, "/lib/Ogre/1/a.stl", 10, "a");
+        model_at(&conn, "/lib/Ogre/2/b.stl", 10, "b");
+        let s = suggest_packages(&conn).unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].name, "Ogre");
+    }
+
+    /// Nothing is grouped without someone saying so, so a scan must leave
+    /// every file unpackaged.
+    #[test]
+    fn scanning_alone_packages_nothing() {
+        let conn = db();
+        let a = model_at(&conn, "/lib/Thing/Unsupported/a.stl", 10, "a");
+        model_at(&conn, "/lib/Thing/Unsupported/b.stl", 10, "b");
+        assert!(get_model(&conn, a).unwrap().unwrap().package_id.is_none());
+        assert!(list_packages(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn assigning_and_unassigning_never_touches_the_models() {
+        let conn = db();
+        let a = model_at(&conn, "/lib/T/Unsupported/a.stl", 10, "a");
+        let b = model_at(&conn, "/lib/T/Unsupported/b.stl", 10, "b");
+        let pkg = create_package(&conn, "Throk", "/lib/T").unwrap();
+
+        assert_eq!(assign_to_package(&conn, pkg.id, &[a, b]).unwrap(), 2);
+        assert_eq!(list_packages(&conn).unwrap()[0].parts, 2);
+        assert_eq!(get_model(&conn, a).unwrap().unwrap().package_id, Some(pkg.id));
+
+        // Already-packaged files stop being suggested.
+        assert!(suggest_packages(&conn).unwrap().is_empty());
+
+        assert_eq!(unassign_from_package(&conn, &[a]).unwrap(), 1);
+        assert_eq!(list_packages(&conn).unwrap()[0].parts, 1);
+        assert!(get_model(&conn, a).unwrap().unwrap().package_id.is_none());
+    }
+
+    #[test]
+    fn deleting_a_package_keeps_its_files() {
+        let conn = db();
+        let a = model_at(&conn, "/lib/T/a.stl", 10, "a");
+        let pkg = create_package(&conn, "Throk", "/lib/T").unwrap();
+        assign_to_package(&conn, pkg.id, &[a]).unwrap();
+
+        delete_package(&conn, pkg.id).unwrap();
+        assert!(list_packages(&conn).unwrap().is_empty());
+        let still = get_model(&conn, a).unwrap().expect("model survives");
+        assert!(still.package_id.is_none());
+    }
+
+    // ----------------------------------------------------- duplicates ----
+
+    /// Their library has Throk twice. Same bytes, different folders.
+    #[test]
+    fn identical_files_are_reported_once_with_the_space_they_waste() {
+        let conn = db();
+        model_at(&conn, "/lib/Gods/Throk/body.stl", 50_000_000, "samehash");
+        model_at(&conn, "/lib/2/body.stl", 50_000_000, "samehash");
+        model_at(&conn, "/lib/Other/unique.stl", 10, "different");
+
+        let dupes = duplicate_groups(&conn).unwrap();
+        assert_eq!(dupes.len(), 1, "only the repeated hash");
+        assert_eq!(dupes[0].copies, 2);
+        assert_eq!(dupes[0].models.len(), 2);
+        // Keeping one copy returns the other.
+        assert_eq!(dupes[0].wasted_bytes, 50_000_000);
+    }
+
+    #[test]
+    fn a_library_with_no_repeats_reports_none() {
+        let conn = db();
+        model_at(&conn, "/lib/a.stl", 10, "a");
+        model_at(&conn, "/lib/b.stl", 10, "b");
+        assert!(duplicate_groups(&conn).unwrap().is_empty());
+    }
+
+    // ----------------------------------------------------- provenance ----
+
+    #[test]
+    fn provenance_is_stored_and_editable() {
+        let conn = db();
+        let id = upsert_model(
+            &conn, "/lib/Creator/x.stl", "x", 10, "h", 12, [1.0, 1.0, 1.0], 1.0, 100,
+            ("Homonculus Creations", "Patreon 0121"),
+        )
+        .unwrap()
+        .0;
+        let m = get_model(&conn, id).unwrap().unwrap();
+        assert_eq!(m.creator, "Homonculus Creations");
+        assert_eq!(m.source, "Patreon 0121");
+
+        set_provenance(&conn, id, "Homonculus", "Patreon Jan 2021").unwrap();
+        let m = get_model(&conn, id).unwrap().unwrap();
+        assert_eq!(m.creator, "Homonculus");
+        assert_eq!(list_creators(&conn).unwrap()[0].name, "Homonculus");
+    }
+
+    /// A correction must survive a rescan. Re-guessing would quietly undo
+    /// every fix the moment the folder is scanned again.
+    #[test]
+    fn a_rescan_does_not_overwrite_corrected_provenance() {
+        let conn = db();
+        let id = upsert_model(
+            &conn, "/lib/Gods/x.stl", "x", 10, "h1", 12, [1.0, 1.0, 1.0], 1.0, 100,
+            ("Gods", "Patreon 0121"),
+        )
+        .unwrap()
+        .0;
+        set_provenance(&conn, id, "Dark Gods Studio", "Patreon Jan 2021").unwrap();
+
+        // The file changed, so this is an update rather than a no-op.
+        upsert_model(
+            &conn, "/lib/Gods/x.stl", "x", 99, "h2", 12, [1.0, 1.0, 1.0], 1.0, 200,
+            ("Gods", "Patreon 0121"),
+        )
+        .unwrap();
+
+        let m = get_model(&conn, id).unwrap().unwrap();
+        assert_eq!(m.creator, "Dark Gods Studio", "the correction was clobbered");
+        assert_eq!(m.size, 99, "but the file facts did update");
     }
 
     #[test]
@@ -939,4 +1178,343 @@ pub fn path_for_hash(conn: &Connection, hash: &str) -> Result<Option<String>> {
         |r| r.get(0),
     )
     .optional()
+}
+
+// -------------------------------------------------------------- packages ----
+
+/// Folder names that describe a *variant* of a model rather than a model.
+///
+/// `Throk_130mm_Unsupported/` is not a thing you printed, it is one rendering
+/// of a thing. Collapsing these is what lets the supported and unsupported
+/// copies of one model be recognised as the same model.
+fn is_variant_folder(name: &str) -> bool {
+    let flat: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    matches!(
+        flat.as_str(),
+        "supported"
+            | "unsupported"
+            | "presupported"
+            | "stl"
+            | "stls"
+            | "files"
+            | "printfiles"
+            | "parts"
+            | "mesh"
+            | "meshes"
+            | "lys"
+            | "lychee"
+            | "chitubox"
+            | "ctb"
+    ) || (!name.is_empty() && name.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Walk up out of variant folders to the directory that names the model.
+fn collapse_dir(dir: &Path) -> std::path::PathBuf {
+    let mut current = dir.to_path_buf();
+    // Bounded: nested variant folders are rare and runaway recursion toward
+    // the filesystem root would turn unrelated models into one package.
+    for _ in 0..3 {
+        let name = match current.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => break,
+        };
+        if !is_variant_folder(&name) {
+            break;
+        }
+        match current.parent() {
+            Some(parent) if parent.file_name().is_some() => current = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Strip a trailing variant word from a folder name.
+///
+/// `Throk_130mm_Unsupported` is the Throk, not a thing called
+/// "Throk 130mm Unsupported". The folder itself is not collapsed away -- that
+/// would risk merging unrelated models that happen to sit side by side -- but
+/// the package it suggests is named for the model.
+///
+/// Order matters: "unsupported" has to be tested before "supported", or every
+/// unsupported folder gets renamed to end in "un".
+/// Strip a trailing "2", "3" or "copy" that a file manager added when it
+/// duplicated a folder.
+///
+/// Applied only as a step toward recognising a variant folder, and reverted if
+/// that fails -- otherwise a model legitimately called "Dragon 2" would lose
+/// its number.
+fn strip_copy_marker(name: &str) -> &str {
+    let trimmed = name.trim_end();
+    if let Some(idx) = trimmed.rfind(' ') {
+        let tail = &trimmed[idx + 1..];
+        let is_copy_number = !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit());
+        if is_copy_number || tail.eq_ignore_ascii_case("copy") {
+            return trimmed[..idx].trim_end();
+        }
+    }
+    trimmed
+}
+
+fn strip_variant_suffix(name: &str) -> &str {
+    const TOKENS: [&str; 8] = [
+        "unsupported",
+        "presupported",
+        "supported",
+        "printfiles",
+        "stls",
+        "stl",
+        "files",
+        "parts",
+    ];
+    let lower = name.to_ascii_lowercase();
+    for token in TOKENS {
+        for sep in ['_', '-', ' '] {
+            let suffix = format!("{}{}", sep, token);
+            if lower.ends_with(&suffix) && name.len() > suffix.len() {
+                return &name[..name.len() - suffix.len()];
+            }
+        }
+    }
+    name
+}
+
+fn tidy_name(raw: &str) -> String {
+    let spaced: String = raw
+        .chars()
+        .map(|c| if c == '_' || c == '-' { ' ' } else { c })
+        .collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn create_package(conn: &Connection, name: &str, root: &str) -> std::result::Result<Package, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A package needs a name".into());
+    }
+    conn.execute(
+        "INSERT INTO packages (name, root, created_at) VALUES (?1, ?2, ?3)",
+        params![name, root, now()],
+    )
+    .map_err(|e| format!("Could not create package: {}", e))?;
+    Ok(Package {
+        id: conn.last_insert_rowid(),
+        name: name.to_string(),
+        root: root.to_string(),
+        parts: 0,
+        total_bytes: 0,
+    })
+}
+
+pub fn list_packages(conn: &Connection) -> Result<Vec<Package>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, COALESCE(p.root, ''), COUNT(m.id), COALESCE(SUM(m.size), 0)
+         FROM packages p LEFT JOIN models m ON m.package_id = p.id
+         GROUP BY p.id
+         ORDER BY p.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Package {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            root: r.get(2)?,
+            parts: r.get(3)?,
+            total_bytes: r.get(4)?,
+        })
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+pub fn assign_to_package(conn: &Connection, package_id: i64, model_ids: &[i64]) -> Result<usize> {
+    if model_ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut changed = 0;
+    {
+        let mut stmt = tx.prepare("UPDATE models SET package_id = ?1 WHERE id = ?2")?;
+        for id in model_ids {
+            changed += stmt.execute(params![package_id, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+/// Take files back out of whatever package they were in. The files are
+/// untouched; only the grouping is undone.
+pub fn unassign_from_package(conn: &Connection, model_ids: &[i64]) -> Result<usize> {
+    if model_ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut changed = 0;
+    {
+        let mut stmt = tx.prepare("UPDATE models SET package_id = NULL WHERE id = ?1")?;
+        for id in model_ids {
+            changed += stmt.execute(params![id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+pub fn delete_package(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("UPDATE models SET package_id = NULL WHERE package_id = ?1", params![id])?;
+    conn.execute("DELETE FROM packages WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn rename_package(conn: &Connection, id: i64, name: &str) -> std::result::Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A package needs a name".into());
+    }
+    conn.execute("UPDATE packages SET name = ?2 WHERE id = ?1", params![id, name])
+        .map_err(|e| format!("Could not rename package: {}", e))?;
+    Ok(())
+}
+
+/// Groupings that look like one model in parts -- offered, never applied.
+///
+/// A folder of STLs is as often a folder of unrelated models as it is one
+/// model in pieces, so this proposes and the person decides. Only files that
+/// are not already in a package are considered.
+pub fn suggest_packages(conn: &Connection) -> Result<Vec<PackageSuggestion>> {
+    let mut stmt =
+        conn.prepare("SELECT id, path FROM models WHERE package_id IS NULL ORDER BY path")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+
+    let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
+    for (id, path) in rows.flatten() {
+        let parent = match Path::new(&path).parent() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+        let key = collapse_dir(&parent).to_string_lossy().to_string();
+        groups.entry(key).or_default().push(id);
+    }
+
+    let mut out: Vec<PackageSuggestion> = groups
+        .into_iter()
+        // One file in a folder is not a model in parts; it is just a file.
+        .filter(|(_, ids)| ids.len() > 1)
+        .map(|(root, ids)| {
+            let name = Path::new(&root)
+                .file_name()
+                .map(|s| {
+                    let raw = s.to_string_lossy();
+                    // Try dropping a duplicate-folder marker first, but keep it
+                    // unless doing so actually reveals a variant folder.
+                    let without_copy = strip_copy_marker(&raw);
+                    let stripped = strip_variant_suffix(without_copy);
+                    if stripped.len() < without_copy.len() {
+                        tidy_name(stripped)
+                    } else {
+                        tidy_name(strip_variant_suffix(&raw))
+                    }
+                })
+                .unwrap_or_else(|| "Package".to_string());
+            PackageSuggestion {
+                parts: ids.len() as i64,
+                name,
+                root,
+                model_ids: ids,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.parts.cmp(&a.parts).then(a.name.cmp(&b.name)));
+    Ok(out)
+}
+
+// ------------------------------------------------------------ duplicates ----
+
+/// The same bytes stored more than once.
+///
+/// Content hashes are already computed for every file, so this costs one
+/// grouped query and tells you exactly how much disk a tidy-up would return.
+pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
+    let mut stmt = conn.prepare(
+        "SELECT hash, COUNT(*), MIN(size), MIN(name)
+         FROM models
+         GROUP BY hash
+         HAVING COUNT(*) > 1
+         ORDER BY (COUNT(*) - 1) * MIN(size) DESC",
+    )?;
+    let heads = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let mut out = Vec::new();
+    for (hash, copies, size, name) in heads {
+        let mut models = models_with_hash(conn, &hash)?;
+        attach_tags(conn, &mut models)?;
+        out.push(DuplicateGroup {
+            hash,
+            name,
+            copies,
+            // Keeping one copy returns the rest.
+            wasted_bytes: size * (copies - 1),
+            models,
+        });
+    }
+    Ok(out)
+}
+
+fn models_with_hash(conn: &Connection, hash: &str) -> Result<Vec<ModelRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM models WHERE hash = ?1 ORDER BY path",
+    )?;
+    let ids: Vec<i64> = stmt.query_map(params![hash], |r| r.get(0))?.flatten().collect();
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(m) = get_model(conn, id)? {
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ provenance ----
+
+pub fn set_provenance(
+    conn: &Connection,
+    model_id: i64,
+    creator: &str,
+    source: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE models SET creator = ?2, source = ?3 WHERE id = ?1",
+        params![model_id, creator.trim(), source.trim()],
+    )?;
+    Ok(())
+}
+
+/// Every creator seen in the library, with how many models each has.
+pub fn list_creators(conn: &Connection) -> Result<Vec<TagCount>> {
+    let mut stmt = conn.prepare(
+        "SELECT creator, COUNT(*) FROM models
+         WHERE creator <> ''
+         GROUP BY creator
+         ORDER BY COUNT(*) DESC, creator COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(TagCount {
+            name: r.get(0)?,
+            count: r.get(1)?,
+        })
+    })?;
+    Ok(rows.flatten().collect())
 }

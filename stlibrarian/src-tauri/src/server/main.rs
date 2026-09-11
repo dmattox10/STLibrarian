@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
-    Collection, LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount, User,
+    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, Package,
+    PackageSuggestion, ScanReport, TagCount, User,
 };
 use stlibrarian_lib::core::{auth, db, paths, scanner, stl, thumbs};
 use tokio_util::io::ReaderStream;
@@ -163,6 +164,8 @@ struct ModelsParams {
     search: Option<String>,
     tags: Option<String>,
     collection: Option<i64>,
+    creator: Option<String>,
+    package: Option<i64>,
     sort: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -180,6 +183,8 @@ impl From<ModelsParams> for LibraryQuery {
                 .filter(|t| !t.is_empty())
                 .collect(),
             collection: p.collection,
+            creator: p.creator,
+            package: p.package,
             sort: p.sort,
             limit: p.limit,
             offset: p.offset,
@@ -396,6 +401,107 @@ async fn remove_from_collection_route(
     .map(|changed| Json(Changed { changed }))
 }
 
+// -------------------------------------------------------------- packages ----
+
+#[derive(Deserialize)]
+struct NewPackageReq {
+    name: String,
+    #[serde(default)]
+    root: String,
+    #[serde(default)]
+    model_ids: Vec<i64>,
+}
+
+async fn packages_route() -> Result<Json<Vec<Package>>, ApiError> {
+    with_db(|conn| db::list_packages(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn package_suggestions_route() -> Result<Json<Vec<PackageSuggestion>>, ApiError> {
+    with_db(|conn| db::suggest_packages(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn create_package_route(Json(req): Json<NewPackageReq>) -> Result<Json<Package>, ApiError> {
+    let made = tokio::task::spawn_blocking(move || -> std::result::Result<Package, String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        let pkg = db::create_package(&conn, &req.name, &req.root)?;
+        db::assign_to_package(&conn, pkg.id, &req.model_ids).map_err(|e| e.to_string())?;
+        Ok(pkg)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    made.map(Json).map_err(bad)
+}
+
+async fn rename_package_route(
+    Path(id): Path<i64>,
+    Json(req): Json<NameReq>,
+) -> Result<StatusCode, ApiError> {
+    let done = tokio::task::spawn_blocking(move || {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        db::rename_package(&conn, id, &req.name)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
+async fn delete_package_route(Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| db::delete_package(conn, id).map_err(|e| e.to_string())).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn assign_package_route(
+    Path(id): Path<i64>,
+    Json(req): Json<ModelIdsReq>,
+) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| db::assign_to_package(conn, id, &req.model_ids).map_err(|e| e.to_string()))
+        .await
+        .map(|changed| Json(Changed { changed }))
+}
+
+async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Changed>, ApiError> {
+    with_db(move |conn| db::unassign_from_package(conn, &req.model_ids).map_err(|e| e.to_string()))
+        .await
+        .map(|changed| Json(Changed { changed }))
+}
+
+// ------------------------------------------------------------ duplicates ----
+
+async fn duplicates_route() -> Result<Json<Vec<DuplicateGroup>>, ApiError> {
+    with_db(|conn| db::duplicate_groups(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+// ------------------------------------------------------------ provenance ----
+
+#[derive(Deserialize)]
+struct ProvenanceReq {
+    creator: String,
+    source: String,
+}
+
+async fn set_provenance_route(
+    Path(id): Path<i64>,
+    Json(req): Json<ProvenanceReq>,
+) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| {
+        db::set_provenance(conn, id, &req.creator, &req.source).map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn creators_route() -> Result<Json<Vec<TagCount>>, ApiError> {
+    with_db(|conn| db::list_creators(conn).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
 // ------------------------------------------------------------- bulk tags ----
 
 async fn bulk_add_tag_route(Json(req): Json<BulkTagReq>) -> Result<Json<Changed>, ApiError> {
@@ -506,6 +612,16 @@ async fn main() {
         .route("/collections/{id}/models/remove", post(remove_from_collection_route))
         // Under /bulk rather than /models so a selection operation can never
         // be confused with a route addressing one model by id.
+        .route("/packages", get(packages_route))
+        .route("/packages", post(create_package_route))
+        .route("/packages/suggestions", get(package_suggestions_route))
+        .route("/packages/{id}", patch(rename_package_route))
+        .route("/packages/{id}", delete(delete_package_route))
+        .route("/packages/{id}/models", post(assign_package_route))
+        .route("/duplicates", get(duplicates_route))
+        .route("/creators", get(creators_route))
+        .route("/models/{id}/provenance", post(set_provenance_route))
+        .route("/bulk/packages/unassign", post(unassign_package_route))
         .route("/bulk/tags/add", post(bulk_add_tag_route))
         .route("/bulk/tags/remove", post(bulk_remove_tag_route))
         .route("/stats", get(stats_route))

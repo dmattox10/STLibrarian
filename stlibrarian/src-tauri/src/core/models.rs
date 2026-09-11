@@ -18,6 +18,11 @@ pub struct ModelRecord {
     pub has_thumb: bool,
     /// Enclosed volume in cubic millimetres; 0 when the mesh is not closed.
     pub volume: f64,
+    /// Guessed from the path when scanned, and editable. Empty means unknown.
+    pub creator: String,
+    pub source: String,
+    /// Set only when someone groups files together; scanning never assumes it.
+    pub package_id: Option<i64>,
     pub mtime: i64,
     pub tags: Vec<String>,
     /// Names of the collections holding this model. Denormalised onto the row
@@ -56,6 +61,8 @@ pub struct LibraryQuery {
     /// Restrict to one collection. Combines with search and tags rather than
     /// replacing them, so you can search inside a collection.
     pub collection: Option<i64>,
+    pub creator: Option<String>,
+    pub package: Option<i64>,
     pub sort: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -94,4 +101,39 @@ pub struct Collection {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BulkResult {
     pub changed: usize,
+}
+
+/// A group of files that are one model -- body, arms, wings, supported and
+/// unsupported versions.
+///
+/// Membership is always a decision, never an inference. Scanning proposes
+/// groupings; it does not apply them, because a folder full of STLs is just as
+/// often a folder full of unrelated models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Package {
+    pub id: i64,
+    pub name: String,
+    pub root: String,
+    pub parts: i64,
+    pub total_bytes: i64,
+}
+
+/// A grouping the scanner thinks is probably one model, offered for approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageSuggestion {
+    pub name: String,
+    pub root: String,
+    pub model_ids: Vec<i64>,
+    pub parts: i64,
+}
+
+/// Files that are byte-for-byte the same model stored more than once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub name: String,
+    pub copies: i64,
+    /// Bytes that would come back by keeping one copy.
+    pub wasted_bytes: i64,
+    pub models: Vec<ModelRecord>,
 }

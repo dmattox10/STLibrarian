@@ -1,6 +1,7 @@
 use crate::core::db;
 use crate::core::models::{
-    Collection, LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount,
+    Collection, DuplicateGroup, LibraryQuery, LibraryStats, ModelRecord, Package,
+    PackageSuggestion, ScanReport, TagCount,
 };
 use crate::core::paths;
 use crate::core::scanner;
@@ -100,6 +101,74 @@ fn add_to_collection(collection_id: i64, model_ids: Vec<i64>) -> Result<usize, S
 fn remove_from_collection(collection_id: i64, model_ids: Vec<i64>) -> Result<usize, String> {
     let c = conn()?;
     db::remove_from_collection(&c, collection_id, &model_ids).map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------------------ packages ----
+
+#[command]
+fn packages() -> Result<Vec<Package>, String> {
+    let c = conn()?;
+    db::list_packages(&c).map_err(|e| e.to_string())
+}
+
+#[command]
+fn package_suggestions() -> Result<Vec<PackageSuggestion>, String> {
+    let c = conn()?;
+    db::suggest_packages(&c).map_err(|e| e.to_string())
+}
+
+#[command]
+fn create_package(name: String, root: String, model_ids: Vec<i64>) -> Result<Package, String> {
+    let c = conn()?;
+    let pkg = db::create_package(&c, &name, &root)?;
+    db::assign_to_package(&c, pkg.id, &model_ids).map_err(|e| e.to_string())?;
+    Ok(pkg)
+}
+
+#[command]
+fn rename_package(id: i64, name: String) -> Result<(), String> {
+    let c = conn()?;
+    db::rename_package(&c, id, &name)
+}
+
+#[command]
+fn delete_package(id: i64) -> Result<(), String> {
+    let c = conn()?;
+    db::delete_package(&c, id).map_err(|e| e.to_string())
+}
+
+#[command]
+fn assign_to_package(package_id: i64, model_ids: Vec<i64>) -> Result<usize, String> {
+    let c = conn()?;
+    db::assign_to_package(&c, package_id, &model_ids).map_err(|e| e.to_string())
+}
+
+#[command]
+fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
+    let c = conn()?;
+    db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------- duplicates ----
+
+#[command]
+fn duplicates() -> Result<Vec<DuplicateGroup>, String> {
+    let c = conn()?;
+    db::duplicate_groups(&c).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------- provenance ----
+
+#[command]
+fn set_provenance(model_id: i64, creator: String, source: String) -> Result<(), String> {
+    let c = conn()?;
+    db::set_provenance(&c, model_id, &creator, &source).map_err(|e| e.to_string())
+}
+
+#[command]
+fn creators() -> Result<Vec<TagCount>, String> {
+    let c = conn()?;
+    db::list_creators(&c).map_err(|e| e.to_string())
 }
 
 // ----------------------------------------------------------- bulk tags ----
@@ -244,6 +313,16 @@ pub fn run() {
             remove_from_collection,
             bulk_add_tag,
             bulk_remove_tag,
+            packages,
+            package_suggestions,
+            create_package,
+            rename_package,
+            delete_package,
+            assign_to_package,
+            unassign_from_package,
+            duplicates,
+            set_provenance,
+            creators,
             get_thumb,
             put_thumb,
             read_model,

@@ -220,6 +220,46 @@ check "  is a PNG"              "$(api "$BASE/api/thumb/$CUBE_HASH" | head -c 4 
 check "  cached to disk"        "$(ls "$WORK/data/thumbnails" | grep -c "$CUBE_HASH")" 1
 
 
+echo "== packages, duplicates, provenance =="
+# A byte-identical copy of one file, and a folder holding two parts.
+mkdir -p "$WORK/models/Gods/Throk_130mm/Throk_130mm_Unsupported" "$WORK/models/dupes"
+cp "$WORK/models/widget.stl" "$WORK/models/dupes/widget.stl"
+cp "$WORK/models/nested/BRACKET.STL" "$WORK/models/Gods/Throk_130mm/Throk_130mm_Unsupported/body.stl"
+cp "$WORK/models/cube.stl" "$WORK/models/Gods/Throk_130mm/Throk_130mm_Unsupported/arm.stl"
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+
+# Targeted rather than positional: the fixture makes several duplicate pairs
+# and the list is ordered by how much space each wastes.
+dupe_copies() { python3 -c 'import sys,json;print(next(g["copies"] for g in json.load(sys.stdin) if g["name"]==sys.argv[1]))' "$1"; }
+sug_named()   { python3 -c 'import sys,json;print(sum(1 for s in json.load(sys.stdin) if s["name"]==sys.argv[1]))' "$1"; }
+sug_ids()     { python3 -c 'import sys,json;print(json.dumps(next(s["model_ids"] for s in json.load(sys.stdin) if s["name"]==sys.argv[1]),separators=(",",":")))' "$1"; }
+model_field() { python3 -c 'import sys,json;print(json.load(sys.stdin)[0][sys.argv[1]])' "$1"; }
+has_creator() { python3 -c 'import sys,json;print(sum(1 for c in json.load(sys.stdin) if c["name"]==sys.argv[1]))' "$1"; }
+
+check "the copied file is a duplicate" "$(api "$BASE/api/duplicates" | dupe_copies widget)" 2
+check "  originals are not"            "$(api "$BASE/api/duplicates" | python3 -c 'import sys,json;print(sum(1 for g in json.load(sys.stdin) if g["copies"]<2))')" 0
+
+check "suggests the parts folder"      "$(api "$BASE/api/packages/suggestions" | sug_named "Throk 130mm")" 1
+check "  with both parts"              "$(api "$BASE/api/packages/suggestions" | python3 -c 'import sys,json;print(next(s["parts"] for s in json.load(sys.stdin) if s["name"]=="Throk 130mm"))')" 2
+check "nothing packaged yet"           "$(api "$BASE/api/packages" | jlen)" 0
+
+SUG_IDS="$(api "$BASE/api/packages/suggestions" | sug_ids "Throk 130mm")"
+PKG_BODY="$(printf '{"name":"Throk 130mm","root":"/x","model_ids":%s}' "$SUG_IDS")"
+PKG_ID="$(post "$BASE/api/packages" "$PKG_BODY" | jfield id)"
+check "package created with its parts" "$(api "$BASE/api/packages" | jfirst parts)" 2
+check "  filter by package"            "$(api "$BASE/api/models?package=$PKG_ID" | jlen)" 2
+check "  that group stops being suggested" "$(api "$BASE/api/packages/suggestions" | sug_named "Throk 130mm")" 0
+
+check "creator guessed from the path"  "$(api "$BASE/api/models?search=body" | model_field creator)" "Gods"
+check "  and listed"                   "$(api "$BASE/api/creators" | has_creator Gods)" 1
+WIDGET_ID="$(api "$BASE/api/models?search=widget" | jfirst id)"
+PROV='{"creator":"Archvillain Games","source":"Patreon Jan 2021"}'
+check "provenance is editable"         "$(post_code "$BASE/api/models/$WIDGET_ID/provenance" "$PROV")" 204
+check "  and reads back"               "$(api "$BASE/api/models/$WIDGET_ID" | jfield creator)" "Archvillain Games"
+
+check "deleting a package keeps files"  "$(api_code -X DELETE "$BASE/api/packages/$PKG_ID")" 204
+check "  the files are still indexed"   "$(api "$BASE/api/models?search=body" | jlen)" 1
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"

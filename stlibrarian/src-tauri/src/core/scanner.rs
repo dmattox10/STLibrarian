@@ -36,7 +36,7 @@ where
         if !entry.file_type().is_file() || !is_stl(entry.path()) {
             continue;
         }
-        match index_file(conn, entry.path()) {
+        match index_file(conn, entry.path(), Path::new(root)) {
             Ok(Upsert::Added) => report.added += 1,
             Ok(Upsert::Updated) => report.updated += 1,
             Ok(Upsert::Unchanged) => report.unchanged += 1,
@@ -74,7 +74,7 @@ fn is_stl(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
+fn index_file(conn: &Connection, path: &Path, root: &Path) -> Result<Upsert, String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let size = meta.len() as i64;
     let mtime = meta
@@ -93,6 +93,7 @@ fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| path_str.clone());
 
+    let (creator, source) = provenance(path, root);
     let (model_id, outcome) = upsert_model(
         conn,
         &path_str,
@@ -103,6 +104,7 @@ fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
         [dims[0] as f64, dims[1] as f64, dims[2] as f64],
         f64::from(geometry.volume),
         mtime,
+        (&creator, &source),
     )
     .map_err(|e| e.to_string())?;
 
@@ -113,6 +115,42 @@ fn index_file(conn: &Connection, path: &Path) -> Result<Upsert, String> {
     }
 
     Ok(outcome)
+}
+
+/// Guess where a model came from, from where it sits.
+///
+/// The scan root names the batch -- "STLs - Patreon 0121" -- and the first
+/// folder inside it is usually the creator. Both are guesses and both are
+/// editable; a wrong guess costs one correction, whereas an empty field stays
+/// empty across nine hundred models.
+///
+/// Returns (creator, source). Either may be empty when the path says nothing.
+fn provenance<'a>(path: &'a Path, root: &'a Path) -> (String, String) {
+    // Folder names routinely carry stray whitespace -- "Archvillain Games /"
+    // is real -- and it would show up in every creator list forever.
+    let source = root
+        .file_name()
+        .map(|s| s.to_string_lossy().trim().to_string())
+        .unwrap_or_default();
+
+    let creator = path
+        .strip_prefix(root)
+        .ok()
+        .and_then(|rel| {
+            let parts: Vec<_> = rel.components().collect();
+            // Needs at least one directory between the root and the file;
+            // a loose file at the root tells us nothing about its author.
+            if parts.len() >= 2 {
+                parts
+                    .first()
+                    .map(|c| c.as_os_str().to_string_lossy().trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    (creator, source)
 }
 
 /// SHA-256 over a 64 KB window.
