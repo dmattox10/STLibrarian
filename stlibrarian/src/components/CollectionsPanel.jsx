@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Field, Panel } from "./controls/index.jsx";
+import { Alert, Button, Field, Panel, Toggle } from "./controls/index.jsx";
 import { formatCount } from "../lib/format.js";
 
 /**
@@ -18,6 +18,7 @@ export default function CollectionsPanel({
 }) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState("");
+  const [shared, setShared] = useState(true);
   const [renaming, setRenaming] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirming, setConfirming] = useState(null);
@@ -37,7 +38,7 @@ export default function CollectionsPanel({
     const name = draft.trim();
     if (!name) return;
     guard(async () => {
-      await api.createCollection(name);
+      await api.createCollection(name, shared);
       setDraft("");
       setCreating(false);
     });
@@ -91,6 +92,12 @@ export default function CollectionsPanel({
           </Field>
         ) : null}
 
+        {creating && api.needsAuth ? (
+          <Toggle checked={!shared} onChange={(v) => setShared(!v)}>
+            Just for me
+          </Toggle>
+        ) : null}
+
         {collections.length === 0 && !creating ? (
           <span className="dim" style={{ fontSize: 12, lineHeight: 1.5 }}>
             Make a collection, then select models in the grid and add them to it.
@@ -131,7 +138,15 @@ export default function CollectionsPanel({
                 }}
                 title={`${collection.name} — double-click to rename`}
               >
-                <span className="collrow__name">{collection.name}</span>
+                <span className="collrow__name">
+                  {collection.name}
+                  {collection.owner_id != null ? (
+                    <span className="collrow__mine" title="Only you can see this">
+                      {" "}
+                      &#9679;
+                    </span>
+                  ) : null}
+                </span>
                 <span className="collrow__count num">{formatCount(collection.count)}</span>
               </button>
               <button

@@ -1283,3 +1283,78 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --------------------------------------------------------------- people --- */
+
+.userrow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.userrow__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.userrow__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.userrow__role {
+  flex: none;
+  padding: 2px 7px;
+  font-family: var(--font-num);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  background: var(--sub0);
+  border: 1px solid var(--sub1);
+  cursor: pointer;
+}
+
+.userrow__role[aria-pressed="true"] {
+  color: var(--nord0);
+  background: var(--nord13);
+  border-color: var(--nord13);
+  font-weight: 800;
+}
+
+.userrow__role:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.userrow .collrow__x {
+  opacity: 0;
+  width: 20px;
+}
+
+.userrow:hover .collrow__x,
+.userrow .collrow__x:focus-visible {
+  opacity: 1;
+}
+
+/* Who ran a print, and which shelves are somebody's own. */
+.printrow__by {
+  color: var(--nord7);
+  font-size: 11px;
+}
+
+.collrow__mine {
+  color: var(--nord15);
+  font-size: 9px;
+  vertical-align: 2px;
+}

@@ -70,13 +70,13 @@ fn delete_model(model_id: i64) -> Result<(), String> {
 #[command]
 fn collections() -> Result<Vec<Collection>, String> {
     let c = conn()?;
-    db::list_collections(&c).map_err(|e| e.to_string())
+    db::list_collections(&c, None).map_err(|e| e.to_string())
 }
 
 #[command]
 fn create_collection(name: String) -> Result<Collection, String> {
     let c = conn()?;
-    db::create_collection(&c, &name)
+    db::create_collection(&c, &name, None)
 }
 
 #[command]
@@ -201,7 +201,7 @@ fn prints(model_id: i64) -> Result<Vec<PrintRecord>, String> {
 #[command]
 fn log_print(model_id: i64, entry: NewPrint) -> Result<i64, String> {
     let c = conn()?;
-    db::add_print(&c, model_id, &entry)
+    db::add_print(&c, model_id, &entry, None)
 }
 
 #[command]

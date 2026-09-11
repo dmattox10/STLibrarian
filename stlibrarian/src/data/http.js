@@ -117,8 +117,8 @@ export function createHttpAdapter(baseUrl = "") {
     },
 
     collections: () => request("/api/collections"),
-    createCollection: (name) =>
-      request("/api/collections", { method: "POST", body: { name } }),
+    createCollection: (name, shared = true) =>
+      request("/api/collections", { method: "POST", body: { name, shared } }),
     renameCollection: (id, name) =>
       request(`/api/collections/${id}`, { method: "PATCH", body: { name } }),
     deleteCollection: (id) => request(`/api/collections/${id}`, { method: "DELETE" }),
@@ -162,6 +162,15 @@ export function createHttpAdapter(baseUrl = "") {
 
     // The files live on the server, not on whatever machine is browsing, so
     // there is nothing here for a slicer to open.
+    users: () => request("/api/users"),
+    createUser: (username, password, role) =>
+      request("/api/users", { method: "POST", body: { username, password, role } }),
+    setUserRole: (id, role) =>
+      request(`/api/users/${id}`, { method: "PATCH", body: { role } }),
+    setUserPassword: (id, password) =>
+      request(`/api/users/${id}/password`, { method: "POST", body: { password } }),
+    deleteUser: (id) => request(`/api/users/${id}`, { method: "DELETE" }),
+
     slices: (modelId) => request(`/api/models/${modelId}/slices`),
     orphanSlices: () => request("/api/slices/unattached"),
     setSliceOwner: (sliceId, modelId, packageId = null) =>

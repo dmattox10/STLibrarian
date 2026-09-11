@@ -90,7 +90,11 @@ fn migrate(conn: &Connection) -> Result<()> {
             photo      TEXT,
             -- Which sliced file was actually run, when one is known. This is
             -- what turns a log entry into a repeatable job.
-            slice_id   INTEGER
+            slice_id   INTEGER,
+            -- Who ran it. Null when the person has since been removed: the
+            -- record is a shop's account of what came off which printer and
+            -- outlives anyone's account.
+            user_id    INTEGER
         );
         CREATE TABLE IF NOT EXISTS images (
             id    INTEGER PRIMARY KEY,
@@ -109,7 +113,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS collections (
             id         INTEGER PRIMARY KEY,
             name       TEXT UNIQUE NOT NULL COLLATE NOCASE,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            -- Null means shared with everyone. A shop wants both: the
+            -- library's own shelves, and somebody's personal queue.
+            owner_id   INTEGER
         );
         CREATE TABLE IF NOT EXISTS collection_models (
             collection_id INTEGER NOT NULL,
@@ -158,6 +165,20 @@ fn migrate(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!(
                 "ALTER TABLE models ADD COLUMN {} {};",
                 column, decl
+            ))?;
+        }
+    }
+
+    // These tables predate the columns, so existing libraries need them added
+    // in place exactly as the models table did.
+    for (table, column, decl) in [
+        ("prints", "user_id", "INTEGER"),
+        ("collections", "owner_id", "INTEGER"),
+    ] {
+        if !has_column(conn, table, column) {
+            conn.execute_batch(&format!(
+                "ALTER TABLE {} ADD COLUMN {} {};",
+                table, column, decl
             ))?;
         }
     }
@@ -622,7 +643,11 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn create_collection(conn: &Connection, name: &str) -> std::result::Result<Collection, String> {
+pub fn create_collection(
+    conn: &Connection,
+    name: &str,
+    owner_id: Option<i64>,
+) -> std::result::Result<Collection, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("A collection needs a name".into());
@@ -631,8 +656,8 @@ pub fn create_collection(conn: &Connection, name: &str) -> std::result::Result<C
         return Err("That name is too long".into());
     }
     conn.execute(
-        "INSERT INTO collections (name, created_at) VALUES (?1, ?2)",
-        params![name, now()],
+        "INSERT INTO collections (name, created_at, owner_id) VALUES (?1, ?2, ?3)",
+        params![name, now(), owner_id],
     )
     .map_err(|e| {
         // The name column is UNIQUE COLLATE NOCASE, so "Dragons" and "dragons"
@@ -647,6 +672,7 @@ pub fn create_collection(conn: &Connection, name: &str) -> std::result::Result<C
         id: conn.last_insert_rowid(),
         name: name.to_string(),
         count: 0,
+        owner_id,
     })
 }
 
@@ -685,19 +711,23 @@ pub fn delete_collection(conn: &Connection, id: i64) -> Result<()> {
 
 /// Every collection with its size. Unlike tags, empty collections are kept --
 /// you make one before you fill it.
-pub fn list_collections(conn: &Connection) -> Result<Vec<Collection>> {
+pub fn list_collections(conn: &Connection, viewer_id: Option<i64>) -> Result<Vec<Collection>> {
+    // Shared shelves plus this person's own. Someone else's private queue is
+    // not hidden for secrecy -- it is simply not theirs to see in a list.
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.name, COUNT(cm.model_id)
+        "SELECT c.id, c.name, COUNT(cm.model_id), c.owner_id
          FROM collections c
          LEFT JOIN collection_models cm ON cm.collection_id = c.id
+         WHERE c.owner_id IS NULL OR c.owner_id = ?1
          GROUP BY c.id
-         ORDER BY c.name COLLATE NOCASE",
+         ORDER BY c.owner_id IS NOT NULL, c.name COLLATE NOCASE",
     )?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map(params![viewer_id], |r| {
         Ok(Collection {
             id: r.get(0)?,
             name: r.get(1)?,
             count: r.get(2)?,
+            owner_id: r.get(3)?,
         })
     })?;
     Ok(rows.flatten().collect())
@@ -857,6 +887,13 @@ mod tests {
         out
     }
 
+    fn create_collection_shared(
+        conn: &Connection,
+        name: &str,
+    ) -> std::result::Result<Collection, String> {
+        create_collection(conn, name, None)
+    }
+
     fn model_at(conn: &Connection, path: &str, size: i64, hash: &str) -> i64 {
         let name = std::path::Path::new(path)
             .file_stem()
@@ -978,6 +1015,77 @@ mod tests {
         assert!(list_packages(&conn).unwrap().is_empty());
         let still = get_model(&conn, a).unwrap().expect("model survives");
         assert!(still.package_id.is_none());
+    }
+
+    // ----------------------------------------------------- multi-user ----
+
+    fn a_user(conn: &Connection, name: &str, role: &str) -> i64 {
+        crate::core::auth::create_user(conn, name, "longenoughpassword", role)
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn a_print_records_who_ran_it() {
+        let conn = db();
+        let sam = a_user(&conn, "sam", "user");
+        let id = model(&conn, "dragon");
+        add_print(&conn, id, &a_print("success"), Some(sam)).unwrap();
+
+        assert_eq!(list_prints(&conn, id).unwrap()[0].by, "sam");
+    }
+
+    /// A shop's account of what came off which printer outlives anyone's
+    /// account, so removing a person must not remove their history.
+    #[test]
+    fn removing_a_person_keeps_their_prints() {
+        let conn = db();
+        a_user(&conn, "dan", "admin");
+        let sam = a_user(&conn, "sam", "user");
+        let id = model(&conn, "dragon");
+        add_print(&conn, id, &a_print("success"), Some(sam)).unwrap();
+
+        crate::core::auth::delete_user(&conn, sam).unwrap();
+        let history = list_prints(&conn, id).unwrap();
+        assert_eq!(history.len(), 1, "the record survives");
+        assert_eq!(history[0].by, "", "but is no longer attributed");
+        assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 1);
+    }
+
+    #[test]
+    fn a_shared_collection_is_visible_to_everyone() {
+        let conn = db();
+        let dan = a_user(&conn, "dan", "admin");
+        let sam = a_user(&conn, "sam", "user");
+        create_collection(&conn, "Shop shelf", None).unwrap();
+
+        assert_eq!(list_collections(&conn, Some(dan)).unwrap().len(), 1);
+        assert_eq!(list_collections(&conn, Some(sam)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_personal_collection_is_only_listed_for_its_owner() {
+        let conn = db();
+        let dan = a_user(&conn, "dan", "admin");
+        let sam = a_user(&conn, "sam", "user");
+        create_collection(&conn, "Shop shelf", None).unwrap();
+        create_collection(&conn, "Sams queue", Some(sam)).unwrap();
+
+        let for_sam = list_collections(&conn, Some(sam)).unwrap();
+        assert_eq!(for_sam.len(), 2);
+
+        let for_dan = list_collections(&conn, Some(dan)).unwrap();
+        assert_eq!(for_dan.len(), 1, "someone else's queue is not their business");
+        assert_eq!(for_dan[0].name, "Shop shelf");
+    }
+
+    /// The desktop app has one person and no accounts, so everything is shared
+    /// and a viewer of None must still see it.
+    #[test]
+    fn with_no_accounts_at_all_shared_collections_still_list() {
+        let conn = db();
+        create_collection(&conn, "Dragons", None).unwrap();
+        assert_eq!(list_collections(&conn, None).unwrap().len(), 1);
     }
 
     // ---------------------------------------------------------- slices ----
@@ -1110,7 +1218,7 @@ mod tests {
 
         let mut entry = a_print("success");
         entry.slice_id = Some(slice);
-        add_print(&conn, id, &entry).unwrap();
+        add_print(&conn, id, &entry, None).unwrap();
 
         assert_eq!(list_prints(&conn, id).unwrap()[0].slice_id, Some(slice));
     }
@@ -1134,7 +1242,7 @@ mod tests {
         let id = model(&conn, "dragon");
         assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 0);
 
-        add_print(&conn, id, &a_print("success")).unwrap();
+        add_print(&conn, id, &a_print("success"), None).unwrap();
         let m = get_model(&conn, id).unwrap().unwrap();
         assert_eq!(m.print_count, 1);
         assert!(m.last_printed.is_some());
@@ -1149,8 +1257,8 @@ mod tests {
     fn a_failed_attempt_is_still_a_record() {
         let conn = db();
         let id = model(&conn, "dragon");
-        add_print(&conn, id, &a_print("failed")).unwrap();
-        add_print(&conn, id, &a_print("success")).unwrap();
+        add_print(&conn, id, &a_print("failed"), None).unwrap();
+        add_print(&conn, id, &a_print("success"), None).unwrap();
 
         let history = list_prints(&conn, id).unwrap();
         assert_eq!(history.len(), 2);
@@ -1162,15 +1270,15 @@ mod tests {
     fn an_unknown_outcome_is_refused() {
         let conn = db();
         let id = model(&conn, "dragon");
-        assert!(add_print(&conn, id, &a_print("maybe")).is_err());
-        assert!(add_print(&conn, id, &a_print("")).is_err());
+        assert!(add_print(&conn, id, &a_print("maybe"), None).is_err());
+        assert!(add_print(&conn, id, &a_print(""), None).is_err());
         assert_eq!(list_prints(&conn, id).unwrap().len(), 0);
     }
 
     #[test]
     fn a_print_needs_a_model_that_exists() {
         let conn = db();
-        assert!(add_print(&conn, 9999, &a_print("success")).is_err());
+        assert!(add_print(&conn, 9999, &a_print("success"), None).is_err());
     }
 
     /// The question a pile of downloads cannot answer.
@@ -1179,7 +1287,7 @@ mod tests {
         let conn = db();
         let printed = model(&conn, "printed");
         model(&conn, "untouched");
-        add_print(&conn, printed, &a_print("success")).unwrap();
+        add_print(&conn, printed, &a_print("success"), None).unwrap();
 
         assert_eq!(
             names(&conn, &LibraryQuery { printed: Some(true), ..Default::default() }),
@@ -1197,8 +1305,8 @@ mod tests {
     fn deleting_a_print_leaves_the_rest() {
         let conn = db();
         let id = model(&conn, "dragon");
-        let first = add_print(&conn, id, &a_print("failed")).unwrap();
-        add_print(&conn, id, &a_print("success")).unwrap();
+        let first = add_print(&conn, id, &a_print("failed"), None).unwrap();
+        add_print(&conn, id, &a_print("success"), None).unwrap();
 
         delete_print(&conn, first).unwrap();
         assert_eq!(get_model(&conn, id).unwrap().unwrap().print_count, 1);
@@ -1211,7 +1319,7 @@ mod tests {
     fn deleting_a_model_takes_its_print_history() {
         let conn = db();
         let id = model(&conn, "dragon");
-        add_print(&conn, id, &a_print("success")).unwrap();
+        add_print(&conn, id, &a_print("success"), None).unwrap();
         assert_eq!(library_stats(&conn).unwrap().printed, 1);
 
         delete_model(&conn, id).unwrap();
@@ -1388,11 +1496,11 @@ mod tests {
     #[test]
     fn collections_are_created_listed_and_counted() {
         let conn = db();
-        let dragons = create_collection(&conn, "Dragons").unwrap();
-        create_collection(&conn, "Terrain").unwrap();
+        let dragons = create_collection_shared(&conn, "Dragons").unwrap();
+        create_collection_shared(&conn, "Terrain").unwrap();
 
         // An empty collection still appears -- you make one before you fill it.
-        let listed = list_collections(&conn).unwrap();
+        let listed = list_collections(&conn, None).unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].name, "Dragons");
         assert_eq!(listed[0].count, 0);
@@ -1401,7 +1509,7 @@ mod tests {
         let b = model(&conn, "wyvern");
         assert_eq!(add_to_collection(&conn, dragons.id, &[a, b]).unwrap(), 2);
 
-        let listed = list_collections(&conn).unwrap();
+        let listed = list_collections(&conn, None).unwrap();
         assert_eq!(listed[0].count, 2);
         assert_eq!(listed[1].count, 0);
     }
@@ -1409,31 +1517,31 @@ mod tests {
     #[test]
     fn adding_the_same_model_twice_does_not_duplicate_it() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
 
         assert_eq!(add_to_collection(&conn, c.id, &[a]).unwrap(), 1);
         // Second add reports nothing changed rather than creating a second row.
         assert_eq!(add_to_collection(&conn, c.id, &[a]).unwrap(), 0);
-        assert_eq!(list_collections(&conn).unwrap()[0].count, 1);
+        assert_eq!(list_collections(&conn, None).unwrap()[0].count, 1);
     }
 
     #[test]
     fn duplicate_names_are_refused_regardless_of_case() {
         let conn = db();
-        create_collection(&conn, "Dragons").unwrap();
+        create_collection_shared(&conn, "Dragons").unwrap();
         // COLLATE NOCASE: "dragons" and "Dragons" are the same collection, and
         // silently making two would be worse than refusing.
-        let err = create_collection(&conn, "dragons").unwrap_err();
+        let err = create_collection_shared(&conn, "dragons").unwrap_err();
         assert!(err.contains("already exists"), "got: {}", err);
-        assert!(create_collection(&conn, "  ").is_err());
-        assert_eq!(list_collections(&conn).unwrap().len(), 1);
+        assert!(create_collection_shared(&conn, "  ").is_err());
+        assert_eq!(list_collections(&conn, None).unwrap().len(), 1);
     }
 
     #[test]
     fn filtering_by_collection_narrows_the_library() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         model(&conn, "bracket");
         add_to_collection(&conn, c.id, &[a]).unwrap();
@@ -1454,7 +1562,7 @@ mod tests {
     #[test]
     fn collection_and_tag_and_search_combine_rather_than_replace() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let smaug = model(&conn, "smaug");
         let wyvern = model(&conn, "wyvern");
         add_to_collection(&conn, c.id, &[smaug, wyvern]).unwrap();
@@ -1488,7 +1596,7 @@ mod tests {
     #[test]
     fn membership_is_reported_on_the_model() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         add_to_collection(&conn, c.id, &[a]).unwrap();
 
@@ -1501,12 +1609,12 @@ mod tests {
     #[test]
     fn removing_from_a_collection_leaves_the_model_alone() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         add_to_collection(&conn, c.id, &[a]).unwrap();
 
         assert_eq!(remove_from_collection(&conn, c.id, &[a]).unwrap(), 1);
-        assert_eq!(list_collections(&conn).unwrap()[0].count, 0);
+        assert_eq!(list_collections(&conn, None).unwrap()[0].count, 0);
         // The model itself survives.
         assert!(get_model(&conn, a).unwrap().is_some());
     }
@@ -1514,12 +1622,12 @@ mod tests {
     #[test]
     fn deleting_a_collection_does_not_delete_its_models() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         add_to_collection(&conn, c.id, &[a]).unwrap();
 
         delete_collection(&conn, c.id).unwrap();
-        assert!(list_collections(&conn).unwrap().is_empty());
+        assert!(list_collections(&conn, None).unwrap().is_empty());
         assert!(get_model(&conn, a).unwrap().is_some());
         assert_eq!(get_model(&conn, a).unwrap().unwrap().collections.len(), 0);
     }
@@ -1529,24 +1637,24 @@ mod tests {
     #[test]
     fn deleting_a_model_removes_it_from_collections() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         let b = model(&conn, "wyvern");
         add_to_collection(&conn, c.id, &[a, b]).unwrap();
 
         delete_model(&conn, a).unwrap();
-        assert_eq!(list_collections(&conn).unwrap()[0].count, 1);
+        assert_eq!(list_collections(&conn, None).unwrap()[0].count, 1);
     }
 
     #[test]
     fn renaming_a_collection_keeps_its_members() {
         let conn = db();
-        let c = create_collection(&conn, "Dragons").unwrap();
+        let c = create_collection_shared(&conn, "Dragons").unwrap();
         let a = model(&conn, "smaug");
         add_to_collection(&conn, c.id, &[a]).unwrap();
 
         rename_collection(&conn, c.id, "Big Lizards").unwrap();
-        let listed = list_collections(&conn).unwrap();
+        let listed = list_collections(&conn, None).unwrap();
         assert_eq!(listed[0].name, "Big Lizards");
         assert_eq!(listed[0].count, 1);
         assert_eq!(get_model(&conn, a).unwrap().unwrap().collections, vec!["Big Lizards"]);
@@ -2130,6 +2238,7 @@ pub fn add_print(
     conn: &Connection,
     model_id: i64,
     entry: &crate::core::models::NewPrint,
+    user_id: Option<i64>,
 ) -> std::result::Result<i64, String> {
     let outcome = crate::core::models::PrintOutcome::parse(&entry.outcome)
         .ok_or_else(|| "Outcome must be success, partial or failed".to_string())?;
@@ -2139,8 +2248,9 @@ pub fn add_print(
     }
     conn.execute(
         "INSERT INTO prints
-            (model_id, printed_at, printer, material, settings, outcome, notes, photo, slice_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (model_id, printed_at, printer, material, settings, outcome, notes, photo,
+             slice_id, user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             model_id,
             entry.printed_at.unwrap_or_else(now),
@@ -2151,6 +2261,7 @@ pub fn add_print(
             entry.notes.trim(),
             entry.photo,
             entry.slice_id,
+            user_id,
         ],
     )
     .map_err(|e| format!("Could not save print: {}", e))?;
@@ -2159,10 +2270,11 @@ pub fn add_print(
 
 pub fn list_prints(conn: &Connection, model_id: i64) -> Result<Vec<PrintRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, model_id, printed_at, printer, material, settings, outcome, notes, photo,
-                slice_id
-         FROM prints WHERE model_id = ?1
-         ORDER BY printed_at DESC, id DESC",
+        "SELECT p.id, p.model_id, p.printed_at, p.printer, p.material, p.settings, p.outcome,
+                p.notes, p.photo, p.slice_id,
+                COALESCE((SELECT username FROM users WHERE users.id = p.user_id), '')
+         FROM prints p WHERE p.model_id = ?1
+         ORDER BY p.printed_at DESC, p.id DESC",
     )?;
     let rows = stmt.query_map(params![model_id], |r| {
         Ok(PrintRecord {
@@ -2177,6 +2289,7 @@ pub fn list_prints(conn: &Connection, model_id: i64) -> Result<Vec<PrintRecord>>
             notes: r.get(7)?,
             photo: r.get(8)?,
             slice_id: r.get(9)?,
+            by: r.get(10)?,
         })
     })?;
     Ok(rows.flatten().collect())

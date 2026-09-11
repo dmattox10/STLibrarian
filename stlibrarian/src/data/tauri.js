@@ -64,6 +64,9 @@ export function createTauriAdapter() {
     openInSlicer: (modelId) => invoke("open_in_slicer", { modelId }),
     revealInFolder: (modelId) => invoke("reveal_in_folder", { modelId }),
 
+    // The desktop app has one person and no accounts.
+    users: null,
+
     slices: (modelId) => invoke("slices", { modelId }),
     orphanSlices: () => invoke("orphan_slices"),
     setSliceOwner: (sliceId, modelId, packageId = null) =>

@@ -271,3 +271,216 @@ mod tests {
         assert!(create_user(&conn, "  ", "longenough123", "user").is_err());
     }
 }
+
+// ------------------------------------------------------- user management ----
+
+pub fn list_users(conn: &Connection) -> Vec<User> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, username, role FROM users ORDER BY role, username COLLATE NOCASE",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([], |r| {
+        Ok(User {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            role: r.get(2)?,
+        })
+    });
+    match rows {
+        Ok(rows) => rows.flatten().collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn admin_count(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM users WHERE role = 'admin'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+pub fn valid_role(role: &str) -> bool {
+    matches!(role, "admin" | "user")
+}
+
+/// Change someone's role.
+///
+/// Refuses to demote the last administrator. A server with no admin cannot
+/// scan, organise, or make anyone an admin again -- the only way out is
+/// editing the database by hand, which is not a thing a UI should be able to
+/// cause.
+pub fn set_role(conn: &Connection, user_id: i64, role: &str) -> Result<(), String> {
+    if !valid_role(role) {
+        return Err("Role must be admin or user".into());
+    }
+    let current: String = conn
+        .query_row("SELECT role FROM users WHERE id = ?1", params![user_id], |r| {
+            r.get(0)
+        })
+        .map_err(|_| "No such user".to_string())?;
+
+    if current == "admin" && role != "admin" && admin_count(conn) <= 1 {
+        return Err("That is the only administrator".into());
+    }
+    conn.execute(
+        "UPDATE users SET role = ?2 WHERE id = ?1",
+        params![user_id, role],
+    )
+    .map_err(|e| format!("Could not change the role: {}", e))?;
+    Ok(())
+}
+
+pub fn set_password(conn: &Connection, user_id: i64, password: &str) -> Result<(), String> {
+    if password.len() < 8 {
+        return Err("Password must be at least 8 characters".into());
+    }
+    let hash = hash_password(password)?;
+    let changed = conn
+        .execute(
+            "UPDATE users SET password_hash = ?2 WHERE id = ?1",
+            params![user_id, hash],
+        )
+        .map_err(|e| format!("Could not change the password: {}", e))?;
+    if changed == 0 {
+        return Err("No such user".into());
+    }
+    // Every existing session was authenticated with the old password. A
+    // password change usually means it leaked, so they all end here.
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])
+        .ok();
+    Ok(())
+}
+
+/// Remove a user. Their print history survives, unattributed.
+///
+/// The alternative -- deleting the records too -- loses a shop's account of
+/// what came off which printer because somebody left.
+pub fn delete_user(conn: &Connection, user_id: i64) -> Result<(), String> {
+    let role: String = conn
+        .query_row("SELECT role FROM users WHERE id = ?1", params![user_id], |r| {
+            r.get(0)
+        })
+        .map_err(|_| "No such user".to_string())?;
+    if role == "admin" && admin_count(conn) <= 1 {
+        return Err("That is the only administrator".into());
+    }
+
+    conn.execute("UPDATE prints SET user_id = NULL WHERE user_id = ?1", params![user_id])
+        .ok();
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])
+        .ok();
+    conn.execute("DELETE FROM users WHERE id = ?1", params![user_id])
+        .map_err(|e| format!("Could not remove the user: {}", e))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod management_tests {
+    use super::*;
+    use crate::core::db::open_db;
+
+    fn mem() -> Connection {
+        let path = std::env::temp_dir().join(format!(
+            "stlib_users_{}_{}.db",
+            std::process::id(),
+            random_hex(4)
+        ));
+        let conn = open_db(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        conn
+    }
+
+    #[test]
+    fn a_second_user_can_be_added_and_listed() {
+        let conn = mem();
+        create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        create_user(&conn, "sam", "anotherlongone", "user").unwrap();
+
+        let users = list_users(&conn);
+        assert_eq!(users.len(), 2);
+        assert!(login(&conn, "sam", "anotherlongone").is_some());
+    }
+
+    #[test]
+    fn usernames_are_unique() {
+        let conn = mem();
+        create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        assert!(create_user(&conn, "dan", "somethingelse", "user").is_err());
+    }
+
+    /// A server with no administrator cannot scan, organise, or promote
+    /// anyone -- the only way back is editing the database by hand.
+    #[test]
+    fn the_last_administrator_cannot_be_demoted_or_deleted() {
+        let conn = mem();
+        let only = create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        create_user(&conn, "sam", "anotherlongone", "user").unwrap();
+
+        assert!(set_role(&conn, only.id, "user").is_err());
+        assert!(delete_user(&conn, only.id).is_err());
+        assert_eq!(list_users(&conn).len(), 2);
+    }
+
+    #[test]
+    fn with_two_admins_either_may_step_down() {
+        let conn = mem();
+        let a = create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        create_user(&conn, "sam", "anotherlongone", "admin").unwrap();
+
+        set_role(&conn, a.id, "user").unwrap();
+        assert_eq!(
+            list_users(&conn).iter().filter(|u| u.is_admin()).count(),
+            1
+        );
+        // And now that one is the last.
+        let last = list_users(&conn).into_iter().find(|u| u.is_admin()).unwrap();
+        assert!(set_role(&conn, last.id, "user").is_err());
+    }
+
+    #[test]
+    fn an_invented_role_is_refused() {
+        let conn = mem();
+        let u = create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        assert!(set_role(&conn, u.id, "superuser").is_err());
+        assert!(set_role(&conn, u.id, "").is_err());
+    }
+
+    /// A password change usually means the old one leaked.
+    #[test]
+    fn changing_a_password_ends_every_existing_session() {
+        let conn = mem();
+        let u = create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        let session = login(&conn, "dan", "printerfarm99").unwrap();
+        assert!(verify_token(&conn, &session.token).is_some());
+
+        set_password(&conn, u.id, "a-brand-new-one").unwrap();
+        assert!(verify_token(&conn, &session.token).is_none());
+        assert!(login(&conn, "dan", "printerfarm99").is_none());
+        assert!(login(&conn, "dan", "a-brand-new-one").is_some());
+    }
+
+    #[test]
+    fn a_short_password_is_refused_on_change_too() {
+        let conn = mem();
+        let u = create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        assert!(set_password(&conn, u.id, "short").is_err());
+        // The old one still works, so nothing was half-applied.
+        assert!(login(&conn, "dan", "printerfarm99").is_some());
+    }
+
+    #[test]
+    fn removing_a_user_ends_their_sessions() {
+        let conn = mem();
+        create_user(&conn, "dan", "printerfarm99", "admin").unwrap();
+        let sam = create_user(&conn, "sam", "anotherlongone", "user").unwrap();
+        let session = login(&conn, "sam", "anotherlongone").unwrap();
+
+        delete_user(&conn, sam.id).unwrap();
+        assert!(verify_token(&conn, &session.token).is_none());
+        assert!(login(&conn, "sam", "anotherlongone").is_none());
+    }
+}

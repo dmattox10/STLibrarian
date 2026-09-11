@@ -328,6 +328,9 @@ async fn scan_route(
 #[derive(Deserialize)]
 struct NameReq {
     name: String,
+    /// Collections only. Absent means shared.
+    #[serde(default)]
+    shared: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -346,18 +349,30 @@ struct Changed {
     changed: usize,
 }
 
-async fn collections_route() -> Result<Json<Vec<Collection>>, ApiError> {
-    with_db(|conn| db::list_collections(conn).map_err(|e| e.to_string()))
+async fn collections_route(
+    Extension(user): Extension<User>,
+) -> Result<Json<Vec<Collection>>, ApiError> {
+    with_db(move |conn| db::list_collections(conn, Some(user.id)).map_err(|e| e.to_string()))
         .await
         .map(Json)
 }
 
-async fn create_collection_route(Json(req): Json<NameReq>) -> Result<Json<Collection>, ApiError> {
+async fn create_collection_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<NameReq>,
+) -> Result<Json<Collection>, ApiError> {
     // A duplicate name is the user's mistake, not the server's, so it comes
     // back as 400 with the message rather than a 500.
     let made = tokio::task::spawn_blocking(move || {
         let conn = db::open_default().map_err(|e| e.to_string())?;
-        db::create_collection(&conn, &req.name)
+        // Shared by default: a shop's shelves are the common case, and a
+        // private queue is the thing you opt into.
+        let owner = if req.shared.unwrap_or(true) {
+            None
+        } else {
+            Some(user.id)
+        };
+        db::create_collection(&conn, &req.name, owner)
     })
     .await
     .map_err(|e| server_error(e.to_string()))?;
@@ -404,6 +419,105 @@ async fn remove_from_collection_route(
     })
     .await
     .map(|changed| Json(Changed { changed }))
+}
+
+// ----------------------------------------------------------------- users ----
+
+#[derive(Deserialize)]
+struct NewUserReq {
+    username: String,
+    password: String,
+    #[serde(default)]
+    role: String,
+}
+
+#[derive(Deserialize)]
+struct RoleReq {
+    role: String,
+}
+
+#[derive(Deserialize)]
+struct PasswordReq {
+    password: String,
+}
+
+async fn users_route(Extension(user): Extension<User>) -> Result<Json<Vec<User>>, ApiError> {
+    require_admin(&user)?;
+    let list = tokio::task::spawn_blocking(move || {
+        db::open_default().map(|conn| auth::list_users(&conn)).unwrap_or_default()
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    Ok(Json(list))
+}
+
+async fn create_user_route(
+    Extension(user): Extension<User>,
+    Json(req): Json<NewUserReq>,
+) -> Result<Json<User>, ApiError> {
+    require_admin(&user)?;
+    let role = if req.role.is_empty() { "user".to_string() } else { req.role };
+    if !auth::valid_role(&role) {
+        return Err(bad("Role must be admin or user"));
+    }
+    let made = tokio::task::spawn_blocking(move || -> std::result::Result<User, String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        auth::create_user(&conn, &req.username, &req.password, &role)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    made.map(Json).map_err(bad)
+}
+
+async fn set_role_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+    Json(req): Json<RoleReq>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&user)?;
+    let done = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        auth::set_role(&conn, id, &req.role)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
+/// Change a password: an administrator may change anyone's, and anyone may
+/// change their own.
+async fn set_password_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+    Json(req): Json<PasswordReq>,
+) -> Result<StatusCode, ApiError> {
+    if !user.is_admin() && user.id != id {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "You can only change your own password".into(),
+        ));
+    }
+    let done = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        auth::set_password(&conn, id, &req.password)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
+}
+
+async fn delete_user_route(
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&user)?;
+    let done = tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+        let conn = db::open_default().map_err(|e| e.to_string())?;
+        auth::delete_user(&conn, id)
+    })
+    .await
+    .map_err(|e| server_error(e.to_string()))?;
+    done.map(|_| StatusCode::NO_CONTENT).map_err(bad)
 }
 
 // -------------------------------------------------------------- packages ----
@@ -584,12 +698,13 @@ struct Created {
 }
 
 async fn log_print_route(
+    Extension(user): Extension<User>,
     Path(id): Path<i64>,
     Json(entry): Json<NewPrint>,
 ) -> Result<Json<Created>, ApiError> {
     let made = tokio::task::spawn_blocking(move || -> std::result::Result<i64, String> {
         let conn = db::open_default().map_err(|e| e.to_string())?;
-        db::add_print(&conn, id, &entry)
+        db::add_print(&conn, id, &entry, Some(user.id))
     })
     .await
     .map_err(|e| server_error(e.to_string()))?;
@@ -776,6 +891,11 @@ async fn main() {
         .route("/models/{id}/preview", get(preview_route))
         .route("/models/{id}/tags", post(set_tags_route))
         .route("/tags", get(tags_route))
+        .route("/users", get(users_route))
+        .route("/users", post(create_user_route))
+        .route("/users/{id}", patch(set_role_route))
+        .route("/users/{id}", delete(delete_user_route))
+        .route("/users/{id}/password", post(set_password_route))
         .route("/collections", get(collections_route))
         .route("/collections", post(create_collection_route))
         .route("/collections/{id}", patch(rename_collection_route))

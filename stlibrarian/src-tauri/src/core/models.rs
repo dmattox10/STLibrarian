@@ -122,6 +122,8 @@ pub struct Collection {
     pub id: i64,
     pub name: String,
     pub count: i64,
+    /// None means shared with everyone on the server.
+    pub owner_id: Option<i64>,
 }
 
 /// How many rows a bulk operation actually changed.
@@ -185,6 +187,8 @@ pub struct PrintRecord {
     /// again exactly as it went last time" a thing you can do rather than
     /// something you have to remember.
     pub slice_id: Option<i64>,
+    /// Who ran it. Empty when that account has since been removed.
+    pub by: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

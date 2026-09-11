@@ -393,6 +393,67 @@ check "  triangles counted"      "$(api "$BASE/api/models?sort=name" | python3 -
 check "  bounds measured"        "$(api "$BASE/api/models" | python3 -c 'import sys,json;m=next(m for m in json.load(sys.stdin) if m["path"].endswith(".3mf"));print("%gx%gx%g" % (m["dim_x"],m["dim_y"],m["dim_z"]))')" "7x8x9"
 check "  and it previews"        "$(api_code "$BASE/api/thumb/$(api "$BASE/api/models" | python3 -c 'import sys,json;print(next(m["hash"] for m in json.load(sys.stdin) if m["path"].endswith(".3mf")))')")" 200
 
+echo "== users and permissions =="
+ADMIN_AUTH=("${AUTH[@]}")
+check "only the bootstrap admin exists" "$(api "$BASE/api/users" | jlen)" 1
+
+NEWUSER='{"username":"sam","password":"anotherlongone","role":"user"}'
+check "admin can add a user"        "$(post_code "$BASE/api/users" "$NEWUSER")" 200
+check "  now two accounts"          "$(api "$BASE/api/users" | jlen)" 2
+check "duplicate username refused"  "$(post_code "$BASE/api/users" "$NEWUSER")" 400
+check "invented role refused"       "$(post_code "$BASE/api/users" '{"username":"x","password":"longenoughpw","role":"root"}')" 400
+check "short password refused"      "$(post_code "$BASE/api/users" '{"username":"y","password":"short","role":"user"}')" 400
+
+SAM_TOKEN="$(post "$BASE/api/login" '{"username":"sam","password":"anotherlongone"}' | jfield token)"
+check "the new user can sign in"    "${#SAM_TOKEN}" 64
+
+# Everything below runs as sam, who is not an administrator.
+AUTH=(-H "Authorization: Bearer $SAM_TOKEN")
+check "a user can browse"           "$(api_code "$BASE/api/models")" 200
+check "a user can tag"              "$(post_code "$BASE/api/bulk/tags/add" "$BULK_MINIS")" 200
+check "a user cannot scan"          "$(post_code "$BASE/api/scan" "$SCAN_BODY")" 403
+check "a user cannot list users"    "$(api_code "$BASE/api/users")" 403
+check "a user cannot add users"     "$(post_code "$BASE/api/users" '{"username":"z","password":"longenoughpw"}')" 403
+check "a user cannot organise"      "$(post_code "$BASE/api/organize/plan" '{"root":"/tmp/nope"}')" 403
+check "a user cannot delete models" "$(api_code -X DELETE "$BASE/api/models/$HERO_ID")" 403
+
+# A print made by sam is attributed to sam.
+post "$BASE/api/models/$HERO_ID/prints" '{"outcome":"success","printer":"Saturn"}' >/dev/null
+check "the print is attributed"     "$(api "$BASE/api/models/$HERO_ID/prints" | jfirst by)" "sam"
+
+# Collections: shared by default, private on request.
+post "$BASE/api/collections" '{"name":"Sams queue","shared":false}' >/dev/null
+check "sam sees their own queue"    "$(api "$BASE/api/collections" | python3 -c 'import sys,json;print(sum(1 for c in json.load(sys.stdin) if c["name"]=="Sams queue"))')" 1
+
+AUTH=("${ADMIN_AUTH[@]}")
+check "the admin does not see it"   "$(api "$BASE/api/collections" | python3 -c 'import sys,json;print(sum(1 for c in json.load(sys.stdin) if c["name"]=="Sams queue"))')" 0
+post "$BASE/api/collections" '{"name":"Shop shelf"}' >/dev/null
+check "  a shared one reaches both" "$(api "$BASE/api/collections" | python3 -c 'import sys,json;print(sum(1 for c in json.load(sys.stdin) if c["name"]=="Shop shelf"))')" 1
+AUTH=(-H "Authorization: Bearer $SAM_TOKEN")
+check "    including the other user" "$(api "$BASE/api/collections" | python3 -c 'import sys,json;print(sum(1 for c in json.load(sys.stdin) if c["name"]=="Shop shelf"))')" 1
+AUTH=("${ADMIN_AUTH[@]}")
+
+# A password change ends existing sessions. Done before any role juggling,
+# because the checks below deliberately leave the original admin demoted.
+SAM_ID="$(api "$BASE/api/users" | python3 -c 'import sys,json;print(next(u["id"] for u in json.load(sys.stdin) if u["username"]=="sam"))')"
+check "admin can reset a password"  "$(post_code "$BASE/api/users/$SAM_ID/password" '{"password":"a-brand-new-one"}')" 204
+check "  the old session is dead"   "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SAM_TOKEN" "$BASE/api/models")" 401
+check "  and the new one works"     "$(post_code "$BASE/api/login" '{"username":"sam","password":"a-brand-new-one"}')" 200
+
+# Lockout protection.
+ADMIN_ID="$(api "$BASE/api/users" | python3 -c 'import sys,json;print(next(u["id"] for u in json.load(sys.stdin) if u["role"]=="admin"))')"
+check "the last admin cannot step down"  "$(patch_code "$BASE/api/users/$ADMIN_ID" '{"role":"user"}')" 400
+check "the last admin cannot be removed" "$(api_code -X DELETE "$BASE/api/users/$ADMIN_ID")" 400
+check "promoting someone else works"     "$(patch_code "$BASE/api/users/$SAM_ID" '{"role":"admin"}')" 204
+check "  now the first admin may step down" "$(patch_code "$BASE/api/users/$ADMIN_ID" '{"role":"user"}')" 204
+check "  and is no longer an admin"      "$(api_code "$BASE/api/users")" 403
+
+# Put the original admin back, so the rest of the suite still has one.
+SAM_AUTH=(-H "Authorization: Bearer $(post "$BASE/api/login" '{"username":"sam","password":"a-brand-new-one"}' | jfield token)")
+curl -s "${SAM_AUTH[@]}" -X PATCH "$BASE/api/users/$ADMIN_ID" -H 'Content-Type: application/json' -d '{"role":"admin"}' >/dev/null
+check "the original admin is back"  "$(api_code "$BASE/api/users")" 200
+
+
 echo "== sliced files =="
 # A gcode beside a model, carrying the comments a slicer actually writes.
 mkdir -p "$WORK/models/Sliced"

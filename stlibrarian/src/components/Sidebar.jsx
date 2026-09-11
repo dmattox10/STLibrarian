@@ -4,6 +4,7 @@ import CollectionsPanel from "./CollectionsPanel.jsx";
 import PackagesPanel from "./PackagesPanel.jsx";
 import DuplicatesPanel from "./DuplicatesPanel.jsx";
 import OrganizePanel from "./OrganizePanel.jsx";
+import UsersPanel from "./UsersPanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -113,6 +114,7 @@ export default function Sidebar({
   stats,
   onRefresh,
   canScan,
+  me,
 }) {
   return (
     <>
@@ -182,6 +184,8 @@ export default function Sidebar({
       <DuplicatesPanel api={api} onSelectModel={onSelectModel} reloadToken={reloadToken} />
 
       {canScan ? <OrganizePanel api={api} onChanged={onRefresh} /> : null}
+
+      {canScan && api.users ? <UsersPanel api={api} me={me} onChanged={onRefresh} /> : null}
 
       <Panel title="Library">
         <dl className="gc-kv">

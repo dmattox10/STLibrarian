@@ -89,6 +89,9 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     modelRenders: (modelId) => bridge.modelRenders(modelId),
     setModelRender: (modelId, imageId) => bridge.setModelRender(modelId, imageId),
 
+    // The desktop app has one person and no accounts.
+    users: null,
+
     slices: (modelId) => bridge.slices(modelId),
     orphanSlices: () => bridge.orphanSlices(),
     setSliceOwner: (sliceId, modelId, packageId = null) =>

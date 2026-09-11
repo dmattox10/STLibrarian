@@ -187,6 +187,7 @@ export default function PrintLog({ api, model, onChanged }) {
               <div className="printrow__top">
                 <span>{formatDate(p.printed_at)}</span>
                 {p.printer ? <span className="dim">{p.printer}</span> : null}
+                {p.by ? <span className="printrow__by">{p.by}</span> : null}
               </div>
               {p.material || p.settings ? (
                 <span className="dim num printrow__meta">

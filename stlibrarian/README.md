@@ -119,8 +119,8 @@ never have, which is the question a pile of downloads cannot answer.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --no-default-features --lib   # core: 117 tests
-tools/e2e.sh                                             # server + API: 131 checks
+cd src-tauri && cargo test --no-default-features --lib   # core: 130 tests
+tools/e2e.sh                                             # server + API: 159 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
@@ -205,6 +205,24 @@ Only text gcode is parsed. The resin formats are vendor binaries with versioned
 and sometimes obfuscated headers; guessing at those would produce confident
 wrong numbers, which is worse than none, so a `.ctb` shows its size and nothing
 it has not earned.
+
+## Pro: people
+
+Two roles. An administrator scans, organises, deletes models and manages
+people; everyone else browses, tags, collects and logs prints. More roles than
+that is a permissions matrix nobody maintains.
+
+The last administrator cannot step down or be removed -- a server where nobody
+can promote anyone is only fixable by editing the database by hand.
+
+Prints record who ran them, and removing someone keeps their history: a shop's
+account of what came off which printer outlives anybody's account. Changing a
+password ends that person's existing sessions, because a password change
+usually means the old one leaked.
+
+Tags and packages are shared -- they are the library's own structure. A
+collection can be either: shared by default, or just for you, which is the
+difference between the shop's shelves and somebody's print queue.
 
 ## Pro: organising files on disk
 

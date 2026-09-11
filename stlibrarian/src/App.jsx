@@ -347,6 +347,7 @@ export default function App() {
           stats={stats}
           onRefresh={refresh}
           canScan={isAdmin}
+          me={session.user}
         />
       </nav>
 
