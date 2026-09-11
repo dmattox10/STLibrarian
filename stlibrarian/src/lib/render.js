@@ -1,16 +1,24 @@
 import * as THREE from "three";
-import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
-const loader = new STLLoader();
+/** Triangle budgets. A 320px card cannot show more than the first of these. */
+export const THUMB_MAX_TRIANGLES = 60_000;
+export const VIEWER_MAX_TRIANGLES = 250_000;
 
 /**
- * Turn raw STL bytes into a centred, upright, flat-shaded geometry.
+ * Build geometry from the decimated position buffer the backend sends.
+ *
+ * Note what is deliberately absent: any STL parsing. The front end used to
+ * pull whole files across and hand them to STLLoader, which meant a 141 MB /
+ * 3M triangle model became roughly 355 MB of webview memory -- file, plus
+ * positions, plus normals -- and killed the window. The backend streams and
+ * decimates instead, so what arrives here is a few megabytes of floats.
  */
-export function parseStl(buffer) {
-  const geometry = loader.parse(buffer);
-  // An STL is a soup of independent triangles with per-facet normals that are
-  // frequently wrong or absent. Recomputing on non-indexed geometry gives one
-  // normal per face, which is the faceting the format actually describes.
+export function geometryFromPositions(buffer) {
+  const positions = new Float32Array(buffer);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  // Non-indexed geometry, so this produces one normal per face -- the flat
+  // faceting an STL actually describes.
   geometry.computeVertexNormals();
   // Print STLs are authored Z-up, sitting on the bed. three.js is Y-up, so
   // without this every model in the library lies on its back.
@@ -22,22 +30,67 @@ export function parseStl(buffer) {
 
 export function makeMaterial() {
   return new THREE.MeshStandardMaterial({
-    color: 0x8fbcbb,
-    metalness: 0.12,
-    roughness: 0.58,
+    // Light, near-neutral: a printed part in grey resin. The old frost-teal
+    // at 0x8fbcbb was a mid-tone, and against the dark stage it read as an
+    // almost black silhouette once the wireframe was off.
+    color: 0xc4d2d8,
+    metalness: 0.0,
+    roughness: 0.62,
     flatShading: true,
   });
 }
 
-export function lightScene(scene) {
-  scene.add(new THREE.HemisphereLight(0xd8dee9, 0x2e3440, 1.15));
+/**
+ * Wireframe.
+ *
+ * Unlit on purpose. Setting `wireframe: true` on the lit surface material
+ * shades each line by its face normal, so every edge pointing away from the
+ * key light renders almost black -- the mesh looks like it is drawn in dark
+ * grey on a dark background. An unlit material gives every edge the same
+ * brightness, which is the whole point of looking at a wireframe.
+ */
+export function makeWireMaterial() {
+  return new THREE.MeshBasicMaterial({
+    color: 0x88c0d0,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.85,
+  });
+}
 
-  const key = new THREE.DirectionalLight(0xeceff4, 1.6);
+/**
+ * Point cloud. Every vertex of the decimated mesh, drawn unconnected.
+ *
+ * Keeps the look the clustering accidentally produced along the way: with no
+ * surface to hide behind, interior structure and wall thickness show through.
+ */
+export function makePointsMaterial(radius) {
+  return new THREE.PointsMaterial({
+    color: 0x88c0d0,
+    // Scaled to the model so a 10mm part and a 300mm one look alike.
+    size: Math.max(radius * 0.008, 0.0001),
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.9,
+  });
+}
+
+export function lightScene(scene) {
+  // Three-point, deliberately generous. A flat-shaded mesh has no specular
+  // help, so under-lighting it turns every facet the same dark tone.
+  scene.add(new THREE.AmbientLight(0xd8dee9, 0.55));
+  scene.add(new THREE.HemisphereLight(0xeceff4, 0x434c5e, 1.5));
+
+  const key = new THREE.DirectionalLight(0xffffff, 2.1);
   key.position.set(4, 7, 6);
   scene.add(key);
 
+  const fill = new THREE.DirectionalLight(0x8fbcbb, 0.9);
+  fill.position.set(-5, 1, 4);
+  scene.add(fill);
+
   // Frost-blue rim from behind, so silhouettes separate from the dark ground.
-  const rim = new THREE.DirectionalLight(0x5e81ac, 1.1);
+  const rim = new THREE.DirectionalLight(0x5e81ac, 1.2);
   rim.position.set(-6, 2, -5);
   scene.add(rim);
 }
@@ -106,7 +159,7 @@ export function renderThumbnail(buffer, size = 512) {
   let geometry;
   let mesh;
   try {
-    geometry = parseStl(buffer);
+    geometry = geometryFromPositions(buffer);
     if (!geometry.boundingSphere || geometry.boundingSphere.radius === 0) return null;
 
     const material = makeMaterial();

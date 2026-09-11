@@ -1,15 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { frameCamera, lightScene, makeMaterial, parseStl } from "../lib/render.js";
-import { Button, Toggle, RefreshIcon } from "./controls/index.jsx";
+import {
+  frameCamera,
+  geometryFromPositions,
+  lightScene,
+  makeMaterial,
+  makePointsMaterial,
+  makeWireMaterial,
+  VIEWER_MAX_TRIANGLES,
+} from "../lib/render.js";
+import { Button, ExpandIcon, RefreshIcon, Segmented, Toggle } from "./controls/index.jsx";
+
+const MODES = [
+  { value: "solid", label: "Solid" },
+  { value: "wire", label: "Wire" },
+  { value: "points", label: "Points" },
+];
 
 /**
  * Interactive preview for one model.
  *
- * Owns exactly one WebGL context for the life of the component and swaps the
- * mesh inside it when the selected model changes, rather than tearing the
- * renderer down and rebuilding it on every click.
+ * Owns exactly one WebGL context for the life of the component and swaps what
+ * is inside it when the model or the view mode changes, rather than tearing
+ * the renderer down and rebuilding it.
  */
 export default function StlViewer({ api, model }) {
   const hostRef = useRef(null);
@@ -17,7 +31,8 @@ export default function StlViewer({ api, model }) {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
   const [spin, setSpin] = useState(true);
-  const [wireframe, setWireframe] = useState(false);
+  const [mode, setMode] = useState("solid");
+  const [expanded, setExpanded] = useState(false);
 
   // --- one-time renderer setup -------------------------------------------
   useEffect(() => {
@@ -50,7 +65,16 @@ export default function StlViewer({ api, model }) {
     controls.enablePan = true;
     controls.screenSpacePanning = true;
 
-    const state = { renderer, scene, camera, controls, mesh: null, spin: true, radius: 1 };
+    const state = {
+      renderer,
+      scene,
+      camera,
+      controls,
+      object: null,
+      geometry: null,
+      spin: true,
+      radius: 1,
+    };
     sceneRef.current = state;
 
     const resize = () => {
@@ -69,7 +93,7 @@ export default function StlViewer({ api, model }) {
     const tick = () => {
       frame = requestAnimationFrame(tick);
       // Spin the model, not the camera, so the user's orbit is preserved.
-      if (state.spin && state.mesh) state.mesh.rotation.y += 0.006;
+      if (state.spin && state.object) state.object.rotation.y += 0.006;
       controls.update();
       renderer.render(scene, camera);
     };
@@ -79,11 +103,11 @@ export default function StlViewer({ api, model }) {
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
-      if (state.mesh) {
-        scene.remove(state.mesh);
-        state.mesh.geometry.dispose();
-        state.mesh.material.dispose();
+      if (state.object) {
+        scene.remove(state.object);
+        state.object.material.dispose();
       }
+      if (state.geometry) state.geometry.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       sceneRef.current = null;
@@ -99,25 +123,23 @@ export default function StlViewer({ api, model }) {
     setStatus("loading");
     setError(null);
 
+    // A higher budget than a thumbnail gets, but still a budget: opening one
+    // model should not be able to exhaust the webview.
     api
-      .readModel(model.id)
+      .readPreview(model.id, VIEWER_MAX_TRIANGLES)
       .then((buffer) => {
         if (cancelled || !sceneRef.current) return;
-        const geometry = parseStl(buffer);
-        const mesh = new THREE.Mesh(geometry, makeMaterial());
-        mesh.material.wireframe = wireframe;
+        const geometry = geometryFromPositions(buffer);
 
-        if (state.mesh) {
-          state.scene.remove(state.mesh);
-          state.mesh.geometry.dispose();
-          state.mesh.material.dispose();
+        if (state.object) {
+          state.scene.remove(state.object);
+          state.object.material.dispose();
         }
-        state.mesh = mesh;
+        if (state.geometry) state.geometry.dispose();
+
+        state.geometry = geometry;
         state.radius = geometry.boundingSphere?.radius || 1;
-        state.scene.add(mesh);
-        frameCamera(state.camera, state.radius);
-        state.controls.target.set(0, 0, 0);
-        state.controls.update();
+        state.object = null; // rebuilt by the mode effect below
         setStatus("ready");
       })
       .catch((e) => {
@@ -129,19 +151,49 @@ export default function StlViewer({ api, model }) {
     return () => {
       cancelled = true;
     };
-    // `wireframe` is applied separately below; re-reading the file when a
-    // checkbox flips would be absurd for a 300 MB model.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, model?.id]);
 
+  // --- build the object for the current mode ------------------------------
   useEffect(() => {
     const state = sceneRef.current;
-    if (state?.mesh) state.mesh.material.wireframe = wireframe;
-  }, [wireframe]);
+    if (!state?.geometry) return;
+
+    const spin = state.object?.rotation.y ?? 0;
+    if (state.object) {
+      state.scene.remove(state.object);
+      state.object.material.dispose();
+    }
+
+    let object;
+    if (mode === "points") {
+      object = new THREE.Points(state.geometry, makePointsMaterial(state.radius));
+    } else if (mode === "wire") {
+      object = new THREE.Mesh(state.geometry, makeWireMaterial());
+    } else {
+      object = new THREE.Mesh(state.geometry, makeMaterial());
+    }
+    // Keep whatever rotation the spin had reached, so switching mode does not
+    // snap the model back to its start.
+    object.rotation.y = spin;
+    state.object = object;
+    state.scene.add(object);
+
+    if (!state.framed) {
+      frameCamera(state.camera, state.radius);
+      state.controls.target.set(0, 0, 0);
+      state.controls.update();
+      state.framed = true;
+    }
+  }, [mode, status]);
 
   useEffect(() => {
     if (sceneRef.current) sceneRef.current.spin = spin;
   }, [spin]);
+
+  // Re-frame when a different model loads.
+  useEffect(() => {
+    if (sceneRef.current) sceneRef.current.framed = false;
+  }, [model?.id]);
 
   const resetView = () => {
     const state = sceneRef.current;
@@ -149,26 +201,33 @@ export default function StlViewer({ api, model }) {
     frameCamera(state.camera, state.radius);
     state.controls.target.set(0, 0, 0);
     state.controls.update();
-    if (state.mesh) state.mesh.rotation.y = 0;
+    if (state.object) state.object.rotation.y = 0;
   };
 
   return (
-    <div className="viewer">
+    <div className={`viewer${expanded ? " viewer--expanded" : ""}`}>
       <div className="viewer__stage" ref={hostRef}>
         {status === "loading" ? <span className="viewer__status">Loading mesh…</span> : null}
         {error ? <span className="viewer__status viewer__status--error">{error}</span> : null}
       </div>
       <div className="viewer__hud">
+        <Segmented value={mode} onChange={setMode} options={MODES} label="View mode" />
         <Toggle checked={spin} onChange={setSpin}>
           Spin
         </Toggle>
-        <Toggle checked={wireframe} onChange={setWireframe}>
-          Wire
-        </Toggle>
         <div style={{ flex: 1 }} />
-        <Button size="sm" onClick={resetView} title="Reset view">
+        <Button size="sm" icon onClick={resetView} title="Reset view" aria-label="Reset view">
           <RefreshIcon />
-          Reset
+        </Button>
+        <Button
+          size="sm"
+          icon
+          onClick={() => setExpanded((v) => !v)}
+          title={expanded ? "Shrink" : "Expand"}
+          aria-label={expanded ? "Shrink viewer" : "Expand viewer"}
+          aria-pressed={expanded}
+        >
+          <ExpandIcon />
         </Button>
       </div>
     </div>

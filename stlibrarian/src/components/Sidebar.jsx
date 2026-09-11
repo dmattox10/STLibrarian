@@ -67,7 +67,7 @@ function ScanPanel({ api, onComplete }) {
           <div className="stack" style={{ gap: 5 }}>
             <Meter busy label="Scanning library" />
             <span className="dim num" style={{ fontSize: 11 }}>
-              {seen > 0 ? `${formatCount(seen)} files indexed…` : "Walking folders…"}
+              {seen > 0 ? `${formatCount(seen)} indexed…` : "Reading files…"}
             </span>
           </div>
         ) : null}

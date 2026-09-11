@@ -144,6 +144,27 @@ fn read_model(id: i64) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// A decimated copy of the mesh, capped at `max_triangles`.
+///
+/// This is what the grid and the viewer actually load. `read_model` still
+/// exists for anything that genuinely needs the original bytes, but nothing
+/// in the UI should call it -- a 3M triangle model will take the webview
+/// down.
+#[command]
+async fn preview_mesh(id: i64, max_triangles: u32) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let c = conn()?;
+        let record = db::get_model(&c, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No such model".to_string())?;
+        let mesh = crate::core::stl::read_preview(std::path::Path::new(&record.path), max_triangles)
+            .map_err(|e| format!("Could not read {}: {}", record.path, e))?;
+        Ok(tauri::ipc::Response::new(mesh.into_bytes()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -213,6 +234,7 @@ pub fn run() {
             get_thumb,
             put_thumb,
             read_model,
+            preview_mesh,
             pick_folder,
             prune_thumbs,
             missing_files

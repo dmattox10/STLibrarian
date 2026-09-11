@@ -16,8 +16,10 @@
  *     removeFromCollection(collectionId, modelIds),
  *     bulkAddTag(modelIds, tag), bulkRemoveTag(modelIds, tag),
  *     readModel(id) -> ArrayBuffer,
+ *     readPreview(id, maxTriangles) -> ArrayBuffer,  // decimated positions
  *     pickFolder() -> string | null,
  *     onScanProgress(cb) -> unsubscribe,
+ *     onFileDrop(cb) -> unsubscribe,   // cb({state:"over"|"drop"|"leave", paths})
  *     pruneThumbs(), missingFiles(),
  *   }
  *
@@ -66,7 +68,9 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
     getThumbUrl: (hash) => bridge.getThumb(hash),
     putThumb: (hash, dataUrl) => bridge.putThumb(hash, dataUrl),
     readModel: (id) => bridge.readModel(id),
+    readPreview: (id, maxTriangles) => bridge.readPreview(id, maxTriangles),
     pickFolder: () => bridge.pickFolder(),
     onScanProgress: (cb) => bridge.onScanProgress?.(cb) ?? (() => {}),
+    onFileDrop: (cb) => bridge.onFileDrop?.(cb) ?? (() => {}),
   };
 }

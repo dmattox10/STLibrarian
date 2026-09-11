@@ -12,6 +12,7 @@ import {
   Button,
   CubeIcon,
   Field,
+  FolderIcon,
   SearchField,
   Segmented,
 } from "./components/controls/index.jsx";
@@ -48,6 +49,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [railOpen, setRailOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState(null);
+
+  // Declared here, above every hook that reads it: `const` is not usable
+  // before its initialiser runs, and the drop effect's dependency array is
+  // evaluated during render.
+  const isAdminSession = session.status === "ready" && session.user?.role === "admin";
   const [reloadToken, setReloadToken] = useState(0);
 
   const requestId = useRef(0);
@@ -122,6 +132,53 @@ export default function App() {
     if (fresh && fresh !== selected) setSelected(fresh);
   }, [models, selected]);
 
+  /**
+   * Index one or more dropped or chosen paths.
+   *
+   * The scanner walks whatever it is given, so a folder and a single .stl
+   * both work -- there is no reason to make the user care which they dropped.
+   */
+  const scanPaths = useCallback(
+    async (paths) => {
+      if (!paths?.length) return;
+      setScanning(true);
+      setScanNote(null);
+      setError(null);
+      try {
+        let added = 0;
+        for (const path of paths) {
+          const report = await api.scan(path);
+          added += report?.added ?? 0;
+        }
+        setScanNote(added > 0 ? `Added ${added} model${added === 1 ? "" : "s"}` : "Nothing new found there");
+        refresh();
+      } catch (e) {
+        setError(e?.message || "That folder could not be scanned.");
+      } finally {
+        setScanning(false);
+      }
+    },
+    [refresh]
+  );
+
+  const chooseFolder = useCallback(async () => {
+    const picked = await api.pickFolder();
+    if (picked) scanPaths([picked]);
+  }, [scanPaths]);
+
+  // Dropping a folder on the window is the gesture people reach for first.
+  useEffect(() => {
+    if (!isAdminSession) return undefined;
+    return api.onFileDrop((event) => {
+      if (event.state === "over") setDragging(true);
+      else if (event.state === "leave") setDragging(false);
+      else if (event.state === "drop") {
+        setDragging(false);
+        scanPaths(event.paths);
+      }
+    });
+  }, [scanPaths, isAdminSession]);
+
   const thumbs = useThumbnails(api, models);
   const { marked, click, selectAll, clear } = useSelection(models, setSelected);
 
@@ -166,6 +223,15 @@ export default function App() {
       </div>
 
       <header className="topbar">
+        <Button
+          className="railtoggle"
+          variant="ghost"
+          size="sm"
+          onClick={() => setRailOpen((v) => !v)}
+          aria-expanded={railOpen}
+        >
+          Library
+        </Button>
         <SearchField
           value={search}
           onChange={setSearch}
@@ -195,6 +261,8 @@ export default function App() {
           {filtered ? ` of ${formatCount(stats.models)}` : ""}
         </span>
 
+        {scanNote ? <span className="gc-badge">{scanNote}</span> : null}
+
         {api.needsAuth ? (
           <Button
             variant="ghost"
@@ -208,7 +276,7 @@ export default function App() {
         ) : null}
       </header>
 
-      <nav className="rail">
+      <nav className={`rail${railOpen ? " rail--open" : ""}`}>
         <Sidebar
           api={api}
           tags={tags}
@@ -222,6 +290,16 @@ export default function App() {
           canScan={isAdmin}
         />
       </nav>
+
+      {dragging ? (
+        <div className="dropveil" aria-hidden="true">
+          <div className="dropveil__card">
+            <FolderIcon />
+            <strong>Release to add to your library</strong>
+            <span>Folders and .stl files both work</span>
+          </div>
+        </div>
+      ) : null}
 
       <main className="main">
         <div className="stage">
@@ -259,8 +337,14 @@ export default function App() {
                   }
                 : {
                     title: "The library is empty",
+                    action: isAdmin ? (
+                      <Button variant="primary" onClick={chooseFolder} disabled={scanning}>
+                        <FolderIcon />
+                        {scanning ? "Scanning…" : "Choose a folder"}
+                      </Button>
+                    ) : null,
                     body: isAdmin
-                      ? "Point STLibrarian at a folder of STL files and it will index everything inside, including subfolders."
+                      ? "Choose a folder below, or drag one onto this window. Everything inside is indexed, subfolders included."
                       : "No models have been added to this server yet.",
                   }
             }

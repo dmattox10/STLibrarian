@@ -146,11 +146,20 @@ export function createHttpAdapter(baseUrl = "") {
       request(`/api/thumb/${hash}`, { method: "PUT", body: { data_url: dataUrl } }),
 
     readModel: (id) => request(`/api/models/${id}/file`, { raw: true }),
+    readPreview: (id, maxTriangles) =>
+      request(`/api/models/${id}/preview?max=${maxTriangles}`, { raw: true }),
 
     // A browser cannot open a native folder picker, so Pro takes a typed path.
     // It is the server's filesystem being scanned, not the viewer's.
     async pickFolder() {
       return null;
+    },
+
+    // A browser drop yields File objects, never a path on the server's disk,
+    // and the server is what does the scanning. Declining is honest; the path
+    // field in the rail is the way in for Pro.
+    onFileDrop() {
+      return () => {};
     },
 
     onScanProgress() {

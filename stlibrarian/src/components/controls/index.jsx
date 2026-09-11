@@ -5,11 +5,14 @@
  */
 import { tagColor } from "../../lib/format.js";
 
-export function Button({ variant, size, icon, children, ...rest }) {
+export function Button({ variant, size, icon, className, children, ...rest }) {
   const classes = ["gc-btn"];
   if (variant) classes.push(`gc-btn--${variant}`);
   if (size) classes.push(`gc-btn--${size}`);
   if (icon) classes.push("gc-btn--icon");
+  // Merged, not spread through `rest`: a className in rest would land after
+  // this attribute and replace every gc-btn class with it.
+  if (className) classes.push(className);
   return (
     <button type="button" className={classes.join(" ")} {...rest}>
       {children}
@@ -198,6 +201,14 @@ export function CloseIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M4 4l8 8M12 4l-8 8" {...stroke} />
+    </svg>
+  );
+}
+
+export function ExpandIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M6 1.5H1.5V6M10 14.5h4.5V10M1.5 10v4.5H6M14.5 6V1.5H10" {...stroke} />
     </svg>
   );
 }

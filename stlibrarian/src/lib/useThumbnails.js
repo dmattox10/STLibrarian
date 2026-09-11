@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { renderThumbnail } from "./render.js";
+import { renderThumbnail, THUMB_MAX_TRIANGLES } from "./render.js";
 
 /**
  * 320px rather than 512.
@@ -44,7 +44,8 @@ export function useThumbnails(api, models) {
             continue;
           }
 
-          const buffer = await api.readModel(model.id);
+          // Decimated, never the whole file.
+          const buffer = await api.readPreview(model.id, THUMB_MAX_TRIANGLES);
           if (cancelled || runId.current !== mine) return;
 
           const dataUrl = renderThumbnail(buffer, THUMB_SIZE);

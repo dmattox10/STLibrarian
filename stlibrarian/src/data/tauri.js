@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 
 /**
@@ -55,9 +56,36 @@ export function createTauriAdapter() {
       return bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer;
     },
 
+    /** Decimated mesh -- what the grid and viewer load. */
+    async readPreview(id, maxTriangles) {
+      const bytes = await invoke("preview_mesh", { id, maxTriangles });
+      return bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer;
+    },
+
     async pickFolder() {
       const picked = await open({ directory: true, multiple: false });
       return typeof picked === "string" ? picked : null;
+    },
+
+    /**
+     * Files and folders dropped onto the window.
+     *
+     * With dragDropEnabled the OS drop is captured by Tauri and delivered
+     * here, which also means the webview never sees an HTML5 drop event --
+     * this listener is the only way to know it happened.
+     */
+    onFileDrop(callback) {
+      const pending = getCurrentWebview().onDragDropEvent((event) => {
+        const kind = event.payload?.type;
+        if (kind === "over" || kind === "enter" || kind === "dragOver") {
+          callback({ state: "over" });
+        } else if (kind === "drop" || kind === "dragDrop") {
+          callback({ state: "drop", paths: event.payload.paths ?? [] });
+        } else {
+          callback({ state: "leave" });
+        }
+      });
+      return () => pending.then((fn) => fn()).catch(() => {});
     },
 
     onScanProgress(callback) {

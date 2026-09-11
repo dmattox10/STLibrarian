@@ -692,7 +692,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
-  min-height: 200px;
+  min-height: 320px;
   display: grid;
   place-items: center;
   cursor: grab;
@@ -727,10 +727,28 @@
 .viewer__hud {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 8px 10px;
   border-top: 1px solid var(--sub1);
   background: rgba(46, 52, 64, 0.75);
+}
+
+/* Expanded: the model takes the window. Inspecting geometry is the one task
+   here that genuinely wants the whole screen. */
+.viewer--expanded {
+  position: fixed;
+  inset: 24px;
+  z-index: 120;
+  background: radial-gradient(70% 60% at 50% 35%, rgba(94, 129, 172, 0.22), transparent 70%),
+    var(--sub0);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--nord3);
+}
+
+.viewer--expanded .viewer__stage {
+  aspect-ratio: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 /* ----------------------------------------------------------------- login -- */
@@ -921,4 +939,41 @@
 
 .collrow__x:hover {
   color: var(--nord11);
+}
+
+/* ------------------------------------------------------------ drop veil -- */
+
+.dropveil {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(46, 52, 64, 0.82);
+  /* The window is the drop target, so the veil must never eat the event. */
+  pointer-events: none;
+}
+
+.dropveil__card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 30px 44px;
+  text-align: center;
+  color: var(--ink-bright);
+  border: 2px dashed var(--nord8);
+  background: rgba(59, 66, 82, 0.96);
+  box-shadow: 0 0 40px var(--glow-soft);
+}
+
+.dropveil__card strong {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dropveil__card span {
+  font-size: 12px;
+  color: var(--ink-dim);
 }

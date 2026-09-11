@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use stlibrarian_lib::core::models::{
     Collection, LibraryQuery, LibraryStats, ModelRecord, ScanReport, TagCount, User,
 };
-use stlibrarian_lib::core::{auth, db, paths, scanner, thumbs};
+use stlibrarian_lib::core::{auth, db, paths, scanner, stl, thumbs};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -224,6 +224,38 @@ async fn model_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
             (header::CONTENT_LENGTH, record.size.to_string()),
         ],
         body,
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct PreviewParams {
+    max: Option<u32>,
+}
+
+/// Decimated mesh for the grid and the viewer. See the note on the desktop
+/// `preview_mesh` command: the full file must never reach a browser.
+async fn preview_route(
+    Path(id): Path<i64>,
+    Query(params): Query<PreviewParams>,
+) -> Result<Response, ApiError> {
+    let max = params.max.unwrap_or(120_000).clamp(1_000, 1_000_000);
+    let bytes = with_db(move |conn| {
+        let record = db::get_model(conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No such model".to_string())?;
+        let mesh = stl::read_preview(std::path::Path::new(&record.path), max)
+            .map_err(|e| e.to_string())?;
+        Ok(mesh.into_bytes())
+    })
+    .await?;
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "private, max-age=600"),
+        ],
+        bytes,
     )
         .into_response())
 }
@@ -454,6 +486,7 @@ async fn main() {
         .route("/models/{id}", get(get_model_route))
         .route("/models/{id}", delete(delete_model_route))
         .route("/models/{id}/file", get(model_file_route))
+        .route("/models/{id}/preview", get(preview_route))
         .route("/models/{id}/tags", post(set_tags_route))
         .route("/tags", get(tags_route))
         .route("/collections", get(collections_route))

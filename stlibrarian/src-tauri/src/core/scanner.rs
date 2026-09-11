@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 pub fn scan_folder(conn: &Connection, root: &str) -> ScanReport {
@@ -21,6 +21,7 @@ where
     F: FnMut(&ScanReport),
 {
     let start = Instant::now();
+    let mut last_emit = Instant::now();
     let mut report = ScanReport::default();
     info!("Scanning folder: {}", root);
 
@@ -45,10 +46,14 @@ where
             }
         }
 
-        let seen = report.added + report.updated + report.unchanged + report.failed;
-        if seen % 25 == 0 {
+        // Throttled by time, not by file count. Counting meant a folder with
+        // fewer than 25 STLs never reported anything at all -- and since each
+        // of these files can take seconds to hash, the UI sat on "Walking
+        // folders" for the entire scan looking like it had hung.
+        if last_emit.elapsed() >= Duration::from_millis(200) {
             report.elapsed_ms = start.elapsed().as_millis() as u64;
             on_progress(&report);
+            last_emit = Instant::now();
         }
     }
 

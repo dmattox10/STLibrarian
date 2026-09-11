@@ -49,7 +49,7 @@
 
   --step: 4px;
   --rail: 264px;
-  --inspector: 340px;
+  --inspector: 430px;
   --speed: 120ms;
 }
 
@@ -280,4 +280,34 @@ body {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---------------------------------------------------- collapsible rail --- */
+
+/* The rail holds the only way to add models, so when it collapses there has
+   to be a way back to it. Hiding it with no handle was the bug that made the
+   app open telling you to scan a folder with no control to do it. */
+/* Qualified with .gc-btn deliberately. On its own, `.railtoggle` ties with
+   `.gc-btn { display: inline-flex }` on specificity, and controls.css is
+   imported after this file -- so the button stayed visible at every width. */
+.gc-btn.railtoggle {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .gc-btn.railtoggle {
+    display: inline-flex;
+  }
+
+  .rail--open {
+    display: flex;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(320px, 86vw);
+    z-index: 50;
+    background: linear-gradient(180deg, var(--nord1), var(--nord0));
+    box-shadow: 20px 0 60px rgba(0, 0, 0, 0.6);
+  }
 }
