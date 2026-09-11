@@ -31,6 +31,11 @@ export default function ModelCard({ model, thumb, selected, marked, index, onSel
         <span className="gc-card__meta">
           <span>{formatBytes(model.size)}</span>
           <span>{formatCount(model.triangles)} tri</span>
+          {model.print_count > 0 ? (
+            <span className="gc-card__printed" title={`Printed ${model.print_count}x`}>
+              &#10003; {model.print_count > 1 ? model.print_count : ""}
+            </span>
+          ) : null}
         </span>
         <span className="gc-card__tags">
           {model.tags.slice(0, 3).map((tag) => (

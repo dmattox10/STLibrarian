@@ -15,6 +15,12 @@
  *     addToCollection(collectionId, modelIds),
  *     removeFromCollection(collectionId, modelIds),
  *     bulkAddTag(modelIds, tag), bulkRemoveTag(modelIds, tag),
+ *     packages(), packageSuggestions(), createPackage(name, root, modelIds),
+ *     renamePackage(id, name), deletePackage(id),
+ *     assignToPackage(packageId, modelIds), unassignFromPackage(modelIds),
+ *     duplicates(), creators(), setProvenance(modelId, creator, source),
+ *     modelRenders(modelId), setModelRender(modelId, imageId),
+ *     prints(modelId), logPrint(modelId, entry), deletePrint(printId),
  *     readModel(id) -> ArrayBuffer,
  *     readPreview(id, maxTriangles) -> ArrayBuffer,  // decimated positions
  *     pickFolder() -> string | null,
@@ -63,6 +69,26 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
       bridge.removeFromCollection(collectionId, modelIds),
 
     bulkAddTag: (modelIds, tag) => bridge.bulkAddTag(modelIds, tag),
+
+    packages: () => bridge.packages(),
+    packageSuggestions: () => bridge.packageSuggestions(),
+    createPackage: (name, root, modelIds) => bridge.createPackage(name, root, modelIds),
+    renamePackage: (id, name) => bridge.renamePackage(id, name),
+    deletePackage: (id) => bridge.deletePackage(id),
+    assignToPackage: (packageId, modelIds) => bridge.assignToPackage(packageId, modelIds),
+    unassignFromPackage: (modelIds) => bridge.unassignFromPackage(modelIds),
+
+    duplicates: () => bridge.duplicates(),
+    creators: () => bridge.creators(),
+    setProvenance: (modelId, creator, source) =>
+      bridge.setProvenance(modelId, creator, source),
+
+    modelRenders: (modelId) => bridge.modelRenders(modelId),
+    setModelRender: (modelId, imageId) => bridge.setModelRender(modelId, imageId),
+
+    prints: (modelId) => bridge.prints(modelId),
+    logPrint: (modelId, entry) => bridge.logPrint(modelId, entry),
+    deletePrint: (printId) => bridge.deletePrint(printId),
     bulkRemoveTag: (modelIds, tag) => bridge.bulkRemoveTag(modelIds, tag),
 
     getThumbUrl: (hash) => bridge.getThumb(hash),

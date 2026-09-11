@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import StlViewer from "./StlViewer.jsx";
+import PrintLog from "./PrintLog.jsx";
+import ProvenancePanel from "./ProvenancePanel.jsx";
+import RenderPicker from "./RenderPicker.jsx";
 import { Alert, Button, CloseIcon, Field, Panel, TagChip, TrashIcon } from "./controls/index.jsx";
 import {
   fitsBed,
@@ -158,6 +161,15 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
               </dd>
             </>
           ) : null}
+          {model.print_count > 0 ? (
+            <>
+              <dt>Printed</dt>
+              <dd>
+                {model.print_count}x
+                {model.last_printed ? `, last ${formatDate(model.last_printed)}` : ""}
+              </dd>
+            </>
+          ) : null}
           <dt>Modified</dt>
           <dd>{formatDate(model.mtime)}</dd>
           <dt>Path</dt>
@@ -168,6 +180,12 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
       <Panel title="Tags">
         <TagEditor model={model} api={api} onChanged={onChanged} />
       </Panel>
+
+      <ProvenancePanel api={api} model={model} onChanged={onChanged} />
+
+      <RenderPicker api={api} model={model} onChanged={onChanged} />
+
+      <PrintLog api={api} model={model} onChanged={onChanged} />
 
       <Panel title="Collections">
         {model.collections?.length ? (

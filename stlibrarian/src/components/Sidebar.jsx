@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Field, FolderIcon, Meter, Panel, TagChip } from "./controls/index.jsx";
 import CollectionsPanel from "./CollectionsPanel.jsx";
+import PackagesPanel from "./PackagesPanel.jsx";
+import DuplicatesPanel from "./DuplicatesPanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -99,6 +101,14 @@ export default function Sidebar({
   collections,
   activeCollection,
   onSelectCollection,
+  packages,
+  activePackage,
+  onSelectPackage,
+  creators,
+  activeCreator,
+  onSelectCreator,
+  onSelectModel,
+  reloadToken,
   stats,
   onRefresh,
   canScan,
@@ -106,6 +116,14 @@ export default function Sidebar({
   return (
     <>
       {canScan ? <ScanPanel api={api} onComplete={onRefresh} /> : null}
+
+      <PackagesPanel
+        api={api}
+        packages={packages}
+        activePackage={activePackage}
+        onSelect={onSelectPackage}
+        onChanged={onRefresh}
+      />
 
       <CollectionsPanel
         api={api}
@@ -144,6 +162,24 @@ export default function Sidebar({
         )}
       </Panel>
 
+      {creators.length > 0 ? (
+        <Panel title="Creators">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {creators.slice(0, 24).map((c) => (
+              <TagChip
+                key={c.name}
+                name={c.name}
+                count={c.count}
+                pressed={activeCreator === c.name}
+                onClick={() => onSelectCreator(activeCreator === c.name ? null : c.name)}
+              />
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      <DuplicatesPanel api={api} onSelectModel={onSelectModel} reloadToken={reloadToken} />
+
       <Panel title="Library">
         <dl className="gc-kv">
           <dt>Models</dt>
@@ -152,6 +188,8 @@ export default function Sidebar({
           <dd>{formatBytes(stats.total_bytes)}</dd>
           <dt>Tags</dt>
           <dd>{formatCount(stats.tags)}</dd>
+          <dt>Printed</dt>
+          <dd>{formatCount(stats.printed)}</dd>
           {stats.missing > 0 ? (
             <>
               <dt>Missing</dt>

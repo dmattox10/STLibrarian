@@ -977,3 +977,203 @@
   font-size: 12px;
   color: var(--ink-dim);
 }
+
+/* ------------------------------------------------------- package hints --- */
+
+.suggesthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sub1);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.suggest {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+.suggest__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.suggest__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggest__text .dim {
+  font-size: 10.5px;
+}
+
+/* ---------------------------------------------------------- duplicates --- */
+
+.dupe {
+  border-left: 2px solid var(--nord13);
+  padding-left: 8px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dupe__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dupe__name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dupe__head .num {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dupe__path {
+  border: 0;
+  background: none;
+  padding: 1px 0;
+  text-align: left;
+  font-family: var(--font-num);
+  font-size: 10px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the filename visible when the path is long */
+}
+
+.dupe__path:hover {
+  color: var(--nord8);
+}
+
+/* -------------------------------------------------------------- prints --- */
+
+.printrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(76, 86, 106, 0.4);
+}
+
+.printrow:first-of-type {
+  border-top: 0;
+}
+
+.printrow__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.printrow__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.printrow__top {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-bright);
+}
+
+.printrow__meta,
+.printrow__notes {
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.printrow__notes {
+  color: var(--ink);
+}
+
+.printrow .collrow__x {
+  opacity: 0;
+  width: 20px;
+}
+
+.printrow:hover .collrow__x,
+.printrow .collrow__x:focus-visible {
+  opacity: 1;
+}
+
+/* A model you have actually made. */
+.gc-card__printed {
+  color: var(--nord14);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------ render choices --- */
+
+.renderopts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.renderopt {
+  max-width: 100%;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink-dim);
+  background: var(--sub0);
+  border: 1px solid var(--sub1);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--speed) ease, border-color var(--speed) ease;
+}
+
+.renderopt:hover {
+  color: var(--ink-bright);
+  border-color: var(--nord3);
+}
+
+.renderopt[aria-pressed="true"] {
+  color: var(--nord0);
+  background: linear-gradient(180deg, var(--nord8), var(--nord9));
+  border-color: var(--nord8);
+  font-weight: 700;
+}
+
+.renderopt:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--glow);
+}

@@ -42,6 +42,28 @@ export function createTauriAdapter() {
       invoke("remove_from_collection", { collectionId, modelIds }),
 
     bulkAddTag: (modelIds, tag) => invoke("bulk_add_tag", { modelIds, tag }),
+
+    packages: () => invoke("packages"),
+    packageSuggestions: () => invoke("package_suggestions"),
+    createPackage: (name, root, modelIds) =>
+      invoke("create_package", { name, root, modelIds }),
+    renamePackage: (id, name) => invoke("rename_package", { id, name }),
+    deletePackage: (id) => invoke("delete_package", { id }),
+    assignToPackage: (packageId, modelIds) =>
+      invoke("assign_to_package", { packageId, modelIds }),
+    unassignFromPackage: (modelIds) => invoke("unassign_from_package", { modelIds }),
+
+    duplicates: () => invoke("duplicates"),
+    creators: () => invoke("creators"),
+    setProvenance: (modelId, creator, source) =>
+      invoke("set_provenance", { modelId, creator, source }),
+
+    modelRenders: (modelId) => invoke("model_renders", { modelId }),
+    setModelRender: (modelId, imageId) => invoke("set_model_render", { modelId, imageId }),
+
+    prints: (modelId) => invoke("prints", { modelId }),
+    logPrint: (modelId, entry) => invoke("log_print", { modelId, entry }),
+    deletePrint: (printId) => invoke("delete_print", { printId }),
     bulkRemoveTag: (modelIds, tag) => invoke("bulk_remove_tag", { modelIds, tag }),
     missingFiles: () => invoke("missing_files"),
 

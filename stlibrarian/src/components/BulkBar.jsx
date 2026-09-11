@@ -9,9 +9,19 @@ import { formatCount } from "../lib/format.js";
  * time, and reports what actually changed -- "tagged 12" is different from
  * "tagged 40 of which 28 already had it".
  */
-export default function BulkBar({ api, ids, collections, onDone, onClear, onSelectAll, total }) {
+export default function BulkBar({
+  api,
+  ids,
+  collections,
+  packages,
+  onDone,
+  onClear,
+  onSelectAll,
+  total,
+}) {
   const [tag, setTag] = useState("");
   const [collectionId, setCollectionId] = useState("");
+  const [packageName, setPackageName] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
   const [error, setError] = useState(null);
@@ -122,6 +132,37 @@ export default function BulkBar({ api, ids, collections, onDone, onClear, onSele
           }
         >
           Take out
+        </Button>
+      </div>
+
+      <div className="bulkbar__group">
+        <Field style={{ width: 150 }}>
+          <input
+            value={packageName}
+            placeholder="Package name"
+            onChange={(e) => setPackageName(e.target.value)}
+            aria-label="Name for a new package"
+          />
+        </Field>
+        <Button
+          size="sm"
+          disabled={busy || !packageName.trim() || ids.length < 2}
+          title={
+            ids.length < 2
+              ? "Select the files that are one model"
+              : "Group these files as one model"
+          }
+          onClick={() =>
+            run(
+              () => api.createPackage(packageName.trim(), "", ids),
+              () => {
+                setPackageName("");
+                return `Grouped ${ids.length}`;
+              }
+            )
+          }
+        >
+          Group
         </Button>
       </div>
 

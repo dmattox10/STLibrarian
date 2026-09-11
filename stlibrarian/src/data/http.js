@@ -62,6 +62,9 @@ export function createHttpAdapter(baseUrl = "") {
     if (query.search) params.set("search", query.search);
     if (query.tags?.length) params.set("tags", query.tags.join(","));
     if (query.collection != null) params.set("collection", String(query.collection));
+    if (query.package != null) params.set("package", String(query.package));
+    if (query.creator) params.set("creator", query.creator);
+    if (query.printed != null) params.set("printed", String(query.printed));
     if (query.sort) params.set("sort", query.sort);
     if (query.limit != null) params.set("limit", String(query.limit));
     if (query.offset != null) params.set("offset", String(query.offset));
@@ -131,6 +134,35 @@ export function createHttpAdapter(baseUrl = "") {
 
     bulkAddTag: (modelIds, tag) =>
       request("/api/bulk/tags/add", { method: "POST", body: { model_ids: modelIds, tag } }),
+
+    packages: () => request("/api/packages"),
+    packageSuggestions: () => request("/api/packages/suggestions"),
+    createPackage: (name, root, modelIds) =>
+      request("/api/packages", { method: "POST", body: { name, root, model_ids: modelIds } }),
+    renamePackage: (id, name) =>
+      request(`/api/packages/${id}`, { method: "PATCH", body: { name } }),
+    deletePackage: (id) => request(`/api/packages/${id}`, { method: "DELETE" }),
+    assignToPackage: (packageId, modelIds) =>
+      request(`/api/packages/${packageId}/models`, {
+        method: "POST",
+        body: { model_ids: modelIds },
+      }),
+    unassignFromPackage: (modelIds) =>
+      request("/api/bulk/packages/unassign", { method: "POST", body: { model_ids: modelIds } }),
+
+    duplicates: () => request("/api/duplicates"),
+    creators: () => request("/api/creators"),
+    setProvenance: (modelId, creator, source) =>
+      request(`/api/models/${modelId}/provenance`, { method: "POST", body: { creator, source } }),
+
+    modelRenders: (modelId) => request(`/api/models/${modelId}/renders`),
+    setModelRender: (modelId, imageId) =>
+      request(`/api/models/${modelId}/render`, { method: "POST", body: { image_id: imageId } }),
+
+    prints: (modelId) => request(`/api/models/${modelId}/prints`),
+    logPrint: (modelId, entry) =>
+      request(`/api/models/${modelId}/prints`, { method: "POST", body: entry }),
+    deletePrint: (printId) => request(`/api/prints/${printId}`, { method: "DELETE" }),
     bulkRemoveTag: (modelIds, tag) =>
       request("/api/bulk/tags/remove", { method: "POST", body: { model_ids: modelIds, tag } }),
     async missingFiles() {

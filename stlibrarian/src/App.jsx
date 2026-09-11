@@ -25,7 +25,20 @@ const SORTS = [
   { value: "triangles", label: "Detail" },
 ];
 
-const EMPTY_STATS = { models: 0, total_bytes: 0, tags: 0, missing: 0, without_thumb: 0 };
+const EMPTY_STATS = {
+  models: 0,
+  total_bytes: 0,
+  tags: 0,
+  missing: 0,
+  without_thumb: 0,
+  printed: 0,
+};
+
+const PRINTED_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "printed", label: "Printed" },
+  { value: "never", label: "Never" },
+];
 
 export default function App() {
   // `checking` until we know whether a session exists, so the login screen
@@ -39,12 +52,17 @@ export default function App() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [activeTags, setActiveTags] = useState([]);
   const [activeCollection, setActiveCollection] = useState(null);
+  const [activePackage, setActivePackage] = useState(null);
+  const [activeCreator, setActiveCreator] = useState(null);
+  const [printedFilter, setPrintedFilter] = useState("all");
   const [sort, setSort] = useState("recent");
   const [cardSize, setCardSize] = useState(190);
 
   const [models, setModels] = useState([]);
   const [tags, setTags] = useState([]);
   const [collections, setCollections] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [creators, setCreators] = useState([]);
   const [stats, setStats] = useState(EMPTY_STATS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -83,10 +101,22 @@ export default function App() {
       search: debouncedSearch,
       tags: activeTags,
       collection: activeCollection,
+      package: activePackage,
+      creator: activeCreator,
+      printed:
+        printedFilter === "all" ? null : printedFilter === "printed",
       sort,
       limit: 500,
     }),
-    [debouncedSearch, activeTags, activeCollection, sort]
+    [
+      debouncedSearch,
+      activeTags,
+      activeCollection,
+      activePackage,
+      activeCreator,
+      printedFilter,
+      sort,
+    ]
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
@@ -98,14 +128,23 @@ export default function App() {
     let cancelled = false;
     setLoading(true);
 
-    Promise.all([api.listModels(query), api.listTags(), api.stats(), api.collections()])
-      .then(([nextModels, nextTags, nextStats, nextCollections]) => {
+    Promise.all([
+      api.listModels(query),
+      api.listTags(),
+      api.stats(),
+      api.collections(),
+      api.packages(),
+      api.creators(),
+    ])
+      .then(([nextModels, nextTags, nextStats, nextCollections, nextPackages, nextCreators]) => {
         // Out-of-order responses must not overwrite a newer result.
         if (cancelled || requestId.current !== mine) return;
         setModels(nextModels);
         setTags(nextTags);
         setStats(nextStats);
         setCollections(nextCollections);
+        setPackages(nextPackages);
+        setCreators(nextCreators);
         setError(null);
       })
       .catch((e) => {
@@ -208,7 +247,13 @@ export default function App() {
   }
 
   const isAdmin = session.user?.role === "admin";
-  const filtered = activeTags.length > 0 || debouncedSearch || activeCollection != null;
+  const filtered =
+    activeTags.length > 0 ||
+    Boolean(debouncedSearch) ||
+    activeCollection != null ||
+    activePackage != null ||
+    activeCreator != null ||
+    printedFilter !== "all";
   const markedIds = [...marked];
 
   return (
@@ -239,6 +284,12 @@ export default function App() {
           style={{ width: 280 }}
         />
         <Segmented value={sort} onChange={setSort} options={SORTS} label="Sort order" />
+        <Segmented
+          value={printedFilter}
+          onChange={setPrintedFilter}
+          options={PRINTED_FILTERS}
+          label="Print status"
+        />
 
         <div className="topbar__spacer" />
 
@@ -285,6 +336,14 @@ export default function App() {
           collections={collections}
           activeCollection={activeCollection}
           onSelectCollection={setActiveCollection}
+          packages={packages}
+          activePackage={activePackage}
+          onSelectPackage={setActivePackage}
+          creators={creators}
+          activeCreator={activeCreator}
+          onSelectCreator={setActiveCreator}
+          onSelectModel={setSelected}
+          reloadToken={reloadToken}
           stats={stats}
           onRefresh={refresh}
           canScan={isAdmin}
@@ -329,6 +388,9 @@ export default function App() {
                           setSearch("");
                           setActiveTags([]);
                           setActiveCollection(null);
+                          setActivePackage(null);
+                          setActiveCreator(null);
+                          setPrintedFilter("all");
                         }}
                       >
                         Clear filters
@@ -354,6 +416,7 @@ export default function App() {
             api={api}
             ids={markedIds}
             collections={collections}
+            packages={packages}
             total={models.length}
             onDone={refresh}
             onClear={clear}
