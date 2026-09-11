@@ -67,6 +67,39 @@ TEXT
   exit 1
 fi
 
+# ------------------------------------------------------------- signing -------
+#
+# Optional, and the pipeline works without it. But an unsigned build is refused
+# by Gatekeeper on download ("STLibrarian is damaged and can't be opened") and
+# warned about by SmartScreen, so a public download page wants these.
+say "Signing"
+
+have_secret() { gh secret list --repo "$SOURCE_REPO" 2>/dev/null | grep -q "^$1[[:space:]]"; }
+
+MAC_NEEDED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+MAC_MISSING=""
+for k in $MAC_NEEDED; do have_secret "$k" || MAC_MISSING="$MAC_MISSING $k"; done
+if [ -z "$MAC_MISSING" ]; then
+  ok "macOS builds will be signed and notarized"
+else
+  bad "macOS builds will be UNSIGNED. Gatekeeper refuses these on download."
+  echo "        missing:$MAC_MISSING"
+  echo "        Needs an Apple Developer account (\$99/yr) and a Developer ID"
+  echo "        Application certificate. See \"Signing\" in the README."
+fi
+
+WIN_NEEDED="WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD WINDOWS_CERTIFICATE_THUMBPRINT"
+WIN_MISSING=""
+for k in $WIN_NEEDED; do have_secret "$k" || WIN_MISSING="$WIN_MISSING $k"; done
+if [ -z "$WIN_MISSING" ]; then
+  ok "Windows builds will be signed"
+else
+  bad "Windows builds will be UNSIGNED. SmartScreen will warn users."
+  echo "        missing:$WIN_MISSING"
+fi
+
+ok "Linux builds need no signing"
+
 # --------------------------------------------------------- prove it works ----
 #
 # A secret that exists is not a secret that works. The only way to know is to

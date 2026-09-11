@@ -36,6 +36,14 @@ jobs:
   desktop:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # Declared at job level, not on the steps, because a step's `if` reads the
+    # env context from above it. Empty until the matching secret exists, which
+    # is what the signing guards below test.
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
       # One platform failing should not hide whether the others build.
       fail-fast: false
@@ -98,12 +106,61 @@ jobs:
         working-directory: stlibrarian
         run: yarn test
 
+      # Windows signing needs the certificate in the machine's store before the
+      # bundler runs. Skipped entirely when no certificate is configured, so the
+      # pipeline keeps producing (unsigned) builds until one exists.
+      - name: Import the Windows signing certificate
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType directory -Path certificate -Force | Out-Null
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          Import-PfxCertificate `
+            -FilePath certificate/certificate.pfx `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          Remove-Item -Recurse -Force certificate
+
+      # The thumbprint identifies which certificate in the store to use. It is
+      # specific to the certificate, so it arrives as a secret and is layered
+      # over tauri.conf.json rather than committed.
+      - name: Point the bundler at the certificate
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE_THUMBPRINT != ''
+        shell: bash
+        run: |
+          cat > stlibrarian/signing.windows.json <<JSON
+          {
+            "bundle": {
+              "windows": {
+                "certificateThumbprint": "$WINDOWS_CERTIFICATE_THUMBPRINT",
+                "digestAlgorithm": "sha256",
+                "timestampUrl": "http://timestamp.digicert.com"
+              }
+            }
+          }
+          JSON
+          echo "SIGN_CONFIG=--config signing.windows.json" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing and notarization. Every one of these is empty until
+          # the corresponding secret exists, and tauri-action signs only when
+          # they are set, so an unsigned build is the graceful default rather
+          # than a failure.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Only used to unlock the throwaway keychain the action makes on the
+          # runner. It protects nothing that outlives the job.
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'ci-ephemeral-keychain' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: stlibrarian
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} ${{ env.SIGN_CONFIG }}
           # No release is created here. The bundles are collected and published
           # to the public repository by the job below.
           includeRelease: false
@@ -122,6 +179,29 @@ jobs:
               cp "$f" out/
             done
           ls -la out
+
+      # Whether a build is signed is the kind of thing that is discovered by a
+      # user, months later, unless it is stated here.
+      - name: Report signing status
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            macos-*)
+              if [ -n "$APPLE_CERTIFICATE" ]; then
+                for app in $(find "stlibrarian/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' 2>/dev/null); do
+                  codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tail -3 || true
+                  spctl --assess --type execute "$app" 2>&1 | tail -2 || true
+                done
+              else
+                echo "::warning::Unsigned macOS build. Gatekeeper will refuse it on download until APPLE_CERTIFICATE and the notarization secrets are set."
+              fi
+              ;;
+            windows-latest)
+              if [ -z "$WINDOWS_CERTIFICATE" ]; then
+                echo "::warning::Unsigned Windows build. SmartScreen will warn users until WINDOWS_CERTIFICATE is set."
+              fi
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:

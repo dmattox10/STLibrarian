@@ -250,6 +250,97 @@ be exercised without putting anything in front of anybody.
 The server job deliberately installs no GUI packages. If it ever needs them,
 something has leaked from the desktop half into the shared core.
 
+## Signing
+
+Optional, and everything above works without it. But an unsigned build is not
+merely untidy: macOS refuses a downloaded one outright with *"STLibrarian is
+damaged and can't be opened"*, which reads to a stranger as "this software is
+broken", and Windows shows a SmartScreen warning. For a public download page,
+these are worth the money.
+
+The pipeline signs only when the secrets exist. Until then it keeps producing
+unsigned builds and prints a warning in the run log saying so, rather than
+failing. `tools/setup-releases.sh` reports exactly which half is configured.
+
+### macOS: Apple Developer, $99/yr
+
+You need a **Developer ID Application** certificate, which is the one for
+software distributed outside the App Store.
+
+1. In Xcode, *Settings -> Accounts -> Manage Certificates -> +* -> **Developer
+   ID Application**. Or create it at
+   <https://developer.apple.com/account/resources/certificates/list>.
+2. In **Keychain Access**, find it, right-click -> *Export*, save a `.p12` and
+   set an export password.
+3. Turn it into a secret and read off the identity string:
+
+   ```bash
+   base64 -i Certificates.p12 | pbcopy      # -> APPLE_CERTIFICATE
+   security find-identity -v -p codesigning # -> APPLE_SIGNING_IDENTITY
+   ```
+
+   The identity is the whole quoted string, like
+   `Developer ID Application: Dan Mattox (ABCDE12345)`.
+4. Notarization uses an **app-specific password**, never your Apple password.
+   Make one at <https://appleid.apple.com> under *Sign-In and Security ->
+   App-Specific Passwords*. Your team ID is the code in parentheses above.
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | base64 of the `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | the export password from step 2 |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: ...` |
+| `APPLE_ID` | your Apple account email |
+| `APPLE_PASSWORD` | the app-specific password |
+| `APPLE_TEAM_ID` | the ten-character team ID |
+
+### Windows: an OV or EV certificate, roughly $200-400/yr
+
+From any CA that issues code-signing certificates. An **OV** certificate is
+enough to be signed; only an **EV** one clears SmartScreen immediately, because
+an OV certificate has to build reputation first. Budget accordingly if the
+warning is the thing you are paying to remove.
+
+```bash
+base64 -i cert.pfx | pbcopy    # -> WINDOWS_CERTIFICATE
+```
+
+The thumbprint is the certificate's SHA-1, with spaces removed. In PowerShell
+on a machine where it is installed:
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My | Select-Object Thumbprint, Subject
+```
+
+| Secret | Value |
+| --- | --- |
+| `WINDOWS_CERTIFICATE` | base64 of the `.pfx` |
+| `WINDOWS_CERTIFICATE_PASSWORD` | its export password |
+| `WINDOWS_CERTIFICATE_THUMBPRINT` | SHA-1, no spaces |
+
+The thumbprint is layered over `tauri.conf.json` at build time rather than
+committed, because it belongs to a particular certificate and changes when the
+certificate is renewed.
+
+### Linux
+
+Nothing to do. AppImage, `.deb` and `.rpm` are all installable unsigned.
+
+### Setting them
+
+```bash
+gh secret set APPLE_CERTIFICATE --repo dmattox10/STLibrarian < cert.b64
+gh secret set APPLE_SIGNING_IDENTITY --repo dmattox10/STLibrarian
+# ...and so on; then check what landed:
+tools/setup-releases.sh
+```
+
+### Until you have certificates
+
+Linux is unaffected. For the other two, the honest move is to say so on the
+download page rather than let people meet the error cold: on macOS, right-click
+the app and choose *Open* the first time, or run `xattr -cr /Applications/STLibrarian.app`.
+
 ## How it is put together
 
 ```
