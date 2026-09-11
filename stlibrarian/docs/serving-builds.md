@@ -41,7 +41,7 @@ stlibrarian-releases/
         ├── STLibrarian_0.2.0_x64-setup.exe
         ├── stlibrarian_0.2.0_amd64.AppImage
         ├── stlibrarian-server-linux-x86_64
-        ├── stlibrarian-web.tar.gz
+        ├── stlibrarian-server-linux-aarch64
         └── SHA256SUMS
 ```
 

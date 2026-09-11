@@ -85,24 +85,22 @@ The database migrates itself on start. Back up `data/` first -- see
 
 ## A prebuilt binary
 
-One file, no runtime, no Docker. It needs glibc 2.36 or newer (Debian 12,
-Ubuntu 22.04+, or anything from the last couple of years).
+One file. Not a binary and a web directory -- the browser UI is compiled into
+the executable, so there is nothing to install beside it and nothing to point
+it at. It needs glibc 2.36 or newer (Debian 12, Ubuntu 22.04+, or anything from
+the last couple of years).
 
 ```bash
 curl -fsSL -o stlibrarian-server \
   https://github.com/dmattox10/STLibrarian/releases/latest/download/stlibrarian-server-linux-x86_64
-curl -fsSL -o stlibrarian-web.tar.gz \
-  https://github.com/dmattox10/STLibrarian/releases/latest/download/stlibrarian-web.tar.gz
 
 chmod +x stlibrarian-server
 sudo install -m755 stlibrarian-server /usr/local/bin/
-sudo mkdir -p /var/lib/stlibrarian /usr/share/stlibrarian
-sudo tar xzf stlibrarian-web.tar.gz -C /usr/share/stlibrarian
 
-sudo STLIBRARIAN_DATA_DIR=/var/lib/stlibrarian \
-     STLIBRARIAN_WEB_ROOT=/usr/share/stlibrarian/web \
-     stlibrarian-server
+sudo STLIBRARIAN_DATA_DIR=/var/lib/stlibrarian stlibrarian-server
 ```
+
+Use `stlibrarian-server-linux-aarch64` on an ARM box.
 
 To keep it running, install the unit in
 [`packaging/stlibrarian-server.service`](../packaging/stlibrarian-server.service):
@@ -127,9 +125,19 @@ cargo build --release --no-default-features --features server \
       --bin stlibrarian-server
 ```
 
-`--no-default-features` matters: the default feature set is the desktop app,
-which links Tauri and therefore GTK and webkit2gtk. A headless server has
+Order matters: `dist/` is compiled *into* the binary, so `yarn build` has to
+have run first. It is not an error if it has not -- the server builds and the
+API works, and it says so instead of serving a blank page:
+
+    The web front end was not built into this binary.
+
+`--no-default-features` matters too: the default feature set is the desktop
+app, which links Tauri and therefore GTK and webkit2gtk. A headless server has
 none of those and does not need them.
+
+A debug build reads `dist/` from disk rather than embedding it, so while
+working on the UI a `yarn build` and a refresh is enough. Release builds carry
+the bytes.
 
 ---
 
@@ -141,7 +149,7 @@ default.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `STLIBRARIAN_DATA_DIR` | OS data dir | Where `stl.db` and `thumbnails/` live |
-| `STLIBRARIAN_WEB_ROOT` | `../dist` | The built web UI to serve |
+| `STLIBRARIAN_WEB_ROOT` | *(compiled in)* | Serve the web UI from this directory instead |
 | `STLIBRARIAN_BIND` | `0.0.0.0:3000` | Address and port |
 | `RUST_LOG` | `info` | `debug` when something is wrong |
 

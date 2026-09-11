@@ -128,13 +128,10 @@ jobs:
       - name: Collect
         run: |
           mkdir -p out
+          # One artefact per architecture. The web UI is compiled into it, so
+          # there is nothing to publish beside it.
           cp src-tauri/target/${{ matrix.target }}/release/stlibrarian-server \
              out/stlibrarian-server-${{ matrix.suffix }}
-          # The web UI is the same bytes on every architecture, so it is
-          # published once rather than per target.
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
-            tar czf out/stlibrarian-web.tar.gz --transform 's,^dist,web,' dist
-          fi
           ( cd out && sha256sum -- * > SHA256SUMS-${{ matrix.suffix }} )
 
       - uses: softprops/action-gh-release@v2

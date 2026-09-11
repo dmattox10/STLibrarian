@@ -31,6 +31,9 @@ WORKDIR /src
 # the runtime image needs no libsqlite3 at all. That is the whole reason this
 # image can be a slim base rather than whatever the host happens to ship.
 COPY src-tauri ./src-tauri
+# The web UI is compiled into the binary, so it has to be here before cargo
+# runs -- not copied into the runtime image afterwards.
+COPY --from=web /src/dist ./dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/src-tauri/target \
     cargo build --release --locked --manifest-path src-tauri/Cargo.toml \
@@ -47,13 +50,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
+# One file. The web UI is inside it.
 COPY --from=server /usr/local/bin/stlibrarian-server /usr/local/bin/stlibrarian-server
-COPY --from=web /src/dist /app/web
 
 # The library database and rendered thumbnails. Mount a volume here or the
 # library is lost with the container.
 ENV STLIBRARIAN_DATA_DIR=/data \
-    STLIBRARIAN_WEB_ROOT=/app/web \
     STLIBRARIAN_BIND=0.0.0.0:3000
 VOLUME ["/data"]
 

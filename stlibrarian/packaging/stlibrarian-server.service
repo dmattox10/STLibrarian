@@ -29,7 +29,6 @@ User=stlibrarian
 Group=stlibrarian
 
 Environment=STLIBRARIAN_DATA_DIR=/var/lib/stlibrarian
-Environment=STLIBRARIAN_WEB_ROOT=/usr/share/stlibrarian/web
 Environment=STLIBRARIAN_BIND=0.0.0.0:3000
 Environment=RUST_LOG=info
 

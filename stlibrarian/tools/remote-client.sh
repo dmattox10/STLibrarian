@@ -119,8 +119,10 @@ head1 "Building"
 echo "  ok"
 
 head1 "Starting server on 0.0.0.0:$PORT (client will use $HOST_IP)"
+# No STLIBRARIAN_WEB_ROOT on purpose: this suite runs the server the way a NAS
+# runs it, serving the web UI compiled into the binary. tools/e2e.sh sets the
+# override, so between them both paths are covered.
 STLIBRARIAN_DATA_DIR="$WORK/data" \
-STLIBRARIAN_WEB_ROOT="$HERE/dist" \
 STLIBRARIAN_BIND="0.0.0.0:$PORT" \
   "$HERE/src-tauri/target/release/stlibrarian-server" > "$WORK/server.log" 2>&1 &
 SRV=$!
@@ -271,7 +273,7 @@ check "the first client is still signed in" \
 
 # --- 8. the browser front end ------------------------------------------------
 
-head1 "The web UI, fetched from another machine"
+head1 "The web UI, fetched from another machine (embedded in the binary)"
 check "index serves" \
   "$(remote -o /dev/null -w '%{http_code}' "$BASE/")" "200"
 check "a deep link still serves the app" \

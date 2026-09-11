@@ -10,7 +10,7 @@
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -24,9 +24,95 @@ use stlibrarian_lib::core::models::{
 };
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
 use stlibrarian_lib::core::{auth, db, organize, paths, relink, scanner, stl, thumbs};
+use rust_embed::{Embed, EmbeddedFile};
 use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
+
+// ------------------------------------------------------------- web assets ---
+
+/// The built React front end, compiled into this binary.
+///
+/// A release is then one file. The alternative -- shipping `dist/` beside the
+/// binary and finding it again through `STLIBRARIAN_WEB_ROOT` -- is two things
+/// to install, one of them a relative path, and it is the half people forget.
+///
+/// In a debug build rust-embed reads the same files from disk instead, so
+/// `yarn build` and a refresh is enough while working on the UI. Release
+/// builds carry the bytes.
+#[derive(Embed)]
+#[folder = "../dist/"]
+struct WebAssets;
+
+/// A strong ETag from the content hash rust-embed already computed.
+///
+/// Vite fingerprints the assets, but not `index.html` -- the one file every
+/// visit fetches. This is what turns that into a 304.
+fn etag_for(file: &EmbeddedFile) -> String {
+    let mut tag = String::with_capacity(34);
+    tag.push('"');
+    // Half the hash. A 128-bit tag is not going to collide, and the header is
+    // on every response.
+    for byte in file.metadata.sha256_hash().iter().take(16) {
+        tag.push_str(&format!("{:02x}", byte));
+    }
+    tag.push('"');
+    tag
+}
+
+/// Said once, at the only two moments it can be true: an empty `dist/` at
+/// build time, or a path that matched nothing and no index.html to fall back
+/// on. Both mean the same thing to whoever is reading it.
+fn no_web_ui() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "The web front end was not built into this binary.\n\n\
+         Run `yarn build` in the project root and rebuild the server, or set\n\
+         STLIBRARIAN_WEB_ROOT to a directory that already holds a built one.\n\n\
+         The API is unaffected and is still served under /api.\n",
+    )
+        .into_response()
+}
+
+async fn embedded_web(uri: Uri, headers: HeaderMap) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let requested = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
+
+    // Unknown paths fall back to index.html, with its own 200, so a deep link
+    // survives a refresh and the SPA router decides whether a route exists.
+    // Same behaviour as the ServeDir it replaced.
+    let (path, file) = match WebAssets::get(requested) {
+        Some(file) => (requested, file),
+        None => match WebAssets::get("index.html") {
+            Some(file) => ("index.html", file),
+            None => return no_web_ui(),
+        },
+    };
+
+    let etag = etag_for(&file);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == etag)
+    {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
+
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    (
+        [
+            (header::CONTENT_TYPE, mime.as_ref().to_string()),
+            (header::ETAG, etag),
+        ],
+        file.data.into_owned(),
+    )
+        .into_response()
+}
 
 // ---------------------------------------------------------------- errors ----
 
@@ -1027,17 +1113,28 @@ async fn main() {
             ApiError(StatusCode::NOT_FOUND, "Unknown API endpoint".into())
         });
 
-    // The built React app. Unknown paths fall back to index.html so client-side
-    // routing survives a refresh.
-    let web_root = PathBuf::from(env_or("STLIBRARIAN_WEB_ROOT", "../dist"));
-    // `fallback`, not `not_found_service`: the latter rewrites the response
-    // status to 404, so a deep link would serve the app under a "missing"
-    // status. `fallback` keeps index.html's own 200.
-    let spa = ServeDir::new(&web_root).fallback(ServeFile::new(web_root.join("index.html")));
+    // The built React app, from inside the binary unless told otherwise.
+    // STLIBRARIAN_WEB_ROOT still wins when it is set: it is how you point the
+    // server at a `vite build --watch` output, and how someone patches the UI
+    // on a NAS without a Rust toolchain.
+    let web_root = std::env::var("STLIBRARIAN_WEB_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
 
-    let app = Router::new()
-        .nest("/api", api)
-        .fallback_service(spa)
+    let app = Router::new().nest("/api", api);
+    let app = match &web_root {
+        Some(root) => {
+            // `fallback`, not `not_found_service`: the latter rewrites the
+            // response status to 404, so a deep link would serve the app under
+            // a "missing" status. `fallback` keeps index.html's own 200.
+            let spa = ServeDir::new(root).fallback(ServeFile::new(root.join("index.html")));
+            app.fallback_service(spa)
+        }
+        None => app.fallback(embedded_web),
+    };
+
+    let app = app
         // Same-origin in production; permissive so `vite dev` on :1420 can talk
         // to the API while you work on the front end.
         .layer(
@@ -1055,7 +1152,13 @@ async fn main() {
 
     log::info!("STLibrarian Pro listening on http://{}", addr);
     log::info!("Library at {}", paths::data_dir().display());
-    log::info!("Serving web front end from {}", web_root.display());
+    match &web_root {
+        Some(root) => log::info!("Serving web front end from {}", root.display()),
+        None => log::info!(
+            "Serving {} embedded web files (set STLIBRARIAN_WEB_ROOT to override)",
+            WebAssets::iter().count()
+        ),
+    }
 
     axum::serve(listener, app).await.expect("server failed");
 }

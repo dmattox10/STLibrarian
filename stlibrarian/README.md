@@ -32,6 +32,12 @@ cargo run --no-default-features --features server --bin stlibrarian-server
 The server prints a generated admin password to its console on first run. It is
 shown once and never stored in plaintext, so save it then.
 
+A release build compiles `dist/` into the executable, so what ships is one
+file with no web directory to install beside it and nothing to point at it.
+`STLIBRARIAN_WEB_ROOT` still overrides that when it is set, which is how you
+run the server against a `vite build --watch`. Debug builds read `dist/` from
+disk for the same reason.
+
 That is the from-source route. Nobody installing this on a NAS should need a
 Rust toolchain to do it, so there is also a container:
 
@@ -49,7 +55,7 @@ permissions on a NAS share, reverse proxy settings, and backups.
 | --- | --- | --- |
 | `STLIBRARIAN_DATA_DIR` | platform data dir | Where `stl.db` and previews live |
 | `STLIBRARIAN_BIND` | `0.0.0.0:3000` | Server listen address |
-| `STLIBRARIAN_WEB_ROOT` | `../dist` | Built front end to serve |
+| `STLIBRARIAN_WEB_ROOT` | *(compiled in)* | Serve the front end from this directory instead |
 
 ## What it knows about a model
 
