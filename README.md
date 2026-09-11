@@ -264,26 +264,37 @@ failing. `tools/setup-releases.sh` reports exactly which half is configured.
 
 ### macOS
 
+Export the certificate from Keychain Access, then hand it to the script:
+
+> Keychain Access -> **login** -> **My Certificates** -> right-click your
+> **Developer ID Application** certificate -> *Export...* -> Personal
+> Information Exchange (.p12)
+
 ```bash
-tools/setup-signing-macos.sh
+tools/setup-signing-macos.sh ~/Desktop/DeveloperID.p12
 ```
 
-It finds the certificate, exports it, asks for the two things it cannot know
-(your Apple ID and an app-specific password), uploads all six secrets, and
-shreds the temporary key file on the way out.
+It reads the identity and team ID from your keychain, checks the export, asks
+for your Apple ID and an app-specific password, and uploads all six secrets.
 
-One thing it checks that is easy to get wrong: **"Apple Development" is not the
-certificate you need.** That one signs builds for your own machines, and a
-download signed with it is still refused by Gatekeeper. Distribution outside
-the App Store needs a **Developer ID Application** certificate, which you ask
-Apple for separately:
+**Export that one certificate, not the whole keychain.** The script takes a
+`.p12` rather than making one because `security export -t identities` takes
+*every* identity in the keychain: on a machine that also has an "Apple
+Development" certificate, the automated route uploads that private key to CI
+as well. Verified rather than assumed, by building a two-identity keychain and
+exporting it. The script rejects such a file.
+
+It also rejects a `.p12` that holds the wrong certificate, or that no longer
+opens with the password given. Each of those refusals was tested against a
+file built to trigger it.
+
+**"Apple Development" is not the certificate you need.** It signs builds for
+your own machines, and a download signed with it is still refused by
+Gatekeeper. Distribution outside the App Store needs **Developer ID
+Application**:
 
 > Xcode -> Settings -> Accounts -> your Apple ID -> Manage Certificates -> the
 > **+** at the bottom left -> **Developer ID Application**
-
-Only a team's Account Holder or Admin may create one. The script says so, with
-this instruction, rather than exporting the wrong certificate and leaving you
-to discover it from a user.
 
 Notarization uses an **app-specific password** from
 <https://appleid.apple.com>, never your Apple ID password.
@@ -292,10 +303,14 @@ Notarization uses an **app-specific password** from
 | --- | --- |
 | `APPLE_CERTIFICATE` | base64 of the exported `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | the export password you invent |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: ...`, read from the keychain |
+| `APPLE_SIGNING_IDENTITY` | read from the keychain |
 | `APPLE_ID` | your Apple account email |
 | `APPLE_PASSWORD` | the app-specific password |
 | `APPLE_TEAM_ID` | the ten characters in the identity's parentheses |
+
+A signature made with a secure timestamp stays valid after the certificate
+expires, so builds already shipped keep working. Only new builds need a live
+certificate.
 
 ### Windows: deliberately unsigned
 
