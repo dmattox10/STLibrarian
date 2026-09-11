@@ -31,6 +31,9 @@ pub struct ModelRecord {
     /// know when looking at a wall of models you half remember.
     pub print_count: i64,
     pub last_printed: Option<i64>,
+    /// "supported", "unsupported", or empty when the path says nothing.
+    /// Creators ship both, and which one you are looking at matters.
+    pub variant: String,
     pub mtime: i64,
     pub tags: Vec<String>,
     /// Names of the collections holding this model. Denormalised onto the row
@@ -73,6 +76,7 @@ pub struct LibraryQuery {
     /// have. "What have I never actually made?" is the question a pile of
     /// downloads cannot answer and a library can.
     pub printed: Option<bool>,
+    pub variant: Option<String>,
     pub creator: Option<String>,
     pub package: Option<i64>,
     pub sort: Option<String>,

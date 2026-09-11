@@ -235,7 +235,87 @@ fn cluster(path: &Path, meta: StlMeta, max: u32) -> std::io::Result<PreviewMesh>
 }
 
 /// Stream triangles out of either STL flavour, one callback per facet.
+/// True for every mesh format the library can read.
+pub fn is_supported_mesh(path: &Path) -> bool {
+    matches!(extension_of(path).as_str(), "stl" | "obj")
+}
+
+pub(crate) fn extension_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// Wavefront OBJ.
+///
+/// Unlike STL, an OBJ shares vertices between faces, so the vertex table has
+/// to be held while parsing -- that is the format, not a choice. The files are
+/// correspondingly smaller than the STL of the same mesh.
+fn for_each_triangle_obj<F: FnMut([[f32; 3]; 3])>(
+    path: &Path,
+    f: &mut F,
+) -> std::io::Result<()> {
+    let reader = BufReader::new(File::open(path)?);
+    let mut verts: Vec<[f32; 3]> = Vec::new();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let trimmed = line.trim_start();
+
+        if let Some(rest) = trimmed.strip_prefix("v ") {
+            let mut it = rest.split_whitespace();
+            let mut xyz = [0f32; 3];
+            let mut ok = true;
+            for axis in 0..3 {
+                match it.next().and_then(|t| t.parse::<f32>().ok()) {
+                    Some(v) if v.is_finite() => xyz[axis] = v,
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                verts.push(xyz);
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("f ") {
+            // Each token is v, v/vt, v//vn or v/vt/vn -- only the first index
+            // is geometry. Indices are 1-based, and negative counts back from
+            // the most recent vertex.
+            let idx: Vec<usize> = rest
+                .split_whitespace()
+                .filter_map(|tok| tok.split('/').next())
+                .filter_map(|n| n.parse::<i64>().ok())
+                .filter_map(|i| {
+                    let resolved = if i > 0 {
+                        i - 1
+                    } else if i < 0 {
+                        verts.len() as i64 + i
+                    } else {
+                        return None;
+                    };
+                    usize::try_from(resolved).ok().filter(|&r| r < verts.len())
+                })
+                .collect();
+
+            // A face may be any convex polygon; fan it from the first corner.
+            for k in 1..idx.len().saturating_sub(1) {
+                f([verts[idx[0]], verts[idx[k]], verts[idx[k + 1]]]);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn for_each_triangle<F: FnMut([[f32; 3]; 3])>(path: &Path, mut f: F) -> std::io::Result<()> {
+    if extension_of(path) == "obj" {
+        return for_each_triangle_obj(path, &mut f);
+    }
+
     let file = File::open(path)?;
     let len = file.metadata()?.len();
 
@@ -405,6 +485,85 @@ endsolid cube
     fn zero_triangle_binary_reports_empty() {
         let p = tmp("zero.stl", &binary_stl(&[]));
         assert_eq!(read_meta(&p).unwrap(), StlMeta::empty());
+        std::fs::remove_file(p).ok();
+    }
+
+    // ----------------------------------------------------------- obj ----
+
+    #[test]
+    fn an_obj_is_read_like_any_other_mesh() {
+        let obj = b"# a unit-ish tetrahedron
+v 0 0 0
+v 2 0 0
+v 0 3 0
+v 0 0 4
+f 1 2 3
+f 1 2 4
+f 2 3 4
+f 1 3 4
+";
+        let p = tmp("mesh.obj", obj);
+        let meta = read_meta(&p).unwrap();
+        assert_eq!(meta.triangles, 4);
+        assert_eq!(meta.min, [0.0, 0.0, 0.0]);
+        assert_eq!(meta.max, [2.0, 3.0, 4.0]);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// OBJ faces carry texture and normal indices the geometry does not need.
+    #[test]
+    fn face_indices_with_texture_and_normal_parts_are_handled() {
+        let obj = b"v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1/1/1 2/2/2 3/3/3
+f 1//1 2//2 3//3
+";
+        let p = tmp("slashes.obj", obj);
+        let meta = read_meta(&p).unwrap();
+        assert_eq!(meta.triangles, 2);
+        assert_eq!(meta.max, [1.0, 1.0, 0.0]);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// A quad is one face in OBJ and two triangles everywhere else.
+    #[test]
+    fn polygon_faces_are_fanned_into_triangles() {
+        let obj = b"v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+f 1 2 3 4
+";
+        let p = tmp("quad.obj", obj);
+        assert_eq!(read_meta(&p).unwrap().triangles, 2);
+        std::fs::remove_file(p).ok();
+    }
+
+    /// Negative indices count back from the most recent vertex.
+    #[test]
+    fn relative_face_indices_resolve() {
+        let obj = b"v 0 0 0
+v 5 0 0
+v 0 5 0
+f -3 -2 -1
+";
+        let p = tmp("relative.obj", obj);
+        let meta = read_meta(&p).unwrap();
+        assert_eq!(meta.triangles, 1);
+        assert_eq!(meta.max, [5.0, 5.0, 0.0]);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn an_obj_out_of_range_index_is_skipped_not_panicked_on() {
+        let obj = b"v 0 0 0
+v 1 0 0
+f 1 2 99
+f 1 2 0
+";
+        let p = tmp("bad.obj", obj);
+        assert_eq!(read_meta(&p).unwrap().triangles, 0);
         std::fs::remove_file(p).ok();
     }
 

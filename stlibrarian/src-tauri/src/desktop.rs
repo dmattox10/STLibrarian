@@ -295,6 +295,32 @@ async fn preview_mesh(id: i64, max_triangles: u32) -> Result<tauri::ipc::Respons
     .map_err(|e| e.to_string())?
 }
 
+/// Hand the file to whatever the system opens .stl with -- usually a slicer.
+#[command]
+fn open_in_slicer(app: tauri::AppHandle, model_id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let c = conn()?;
+    let model = db::get_model(&c, model_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No such model".to_string())?;
+    app.opener()
+        .open_path(model.path, None::<&str>)
+        .map_err(|e| format!("Could not open it: {}", e))
+}
+
+/// Show the file in Finder, for everything the default app cannot do.
+#[command]
+fn reveal_in_folder(app: tauri::AppHandle, model_id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let c = conn()?;
+    let model = db::get_model(&c, model_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No such model".to_string())?;
+    app.opener()
+        .reveal_item_in_dir(model.path)
+        .map_err(|e| format!("Could not reveal it: {}", e))
+}
+
 #[command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -374,6 +400,8 @@ pub fn run() {
             prints,
             log_print,
             delete_print,
+            open_in_slicer,
+            reveal_in_folder,
             set_provenance,
             creators,
             get_thumb,

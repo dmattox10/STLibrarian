@@ -61,6 +61,9 @@ export function createTauriAdapter() {
     modelRenders: (modelId) => invoke("model_renders", { modelId }),
     setModelRender: (modelId, imageId) => invoke("set_model_render", { modelId, imageId }),
 
+    openInSlicer: (modelId) => invoke("open_in_slicer", { modelId }),
+    revealInFolder: (modelId) => invoke("reveal_in_folder", { modelId }),
+
     prints: (modelId) => invoke("prints", { modelId }),
     logPrint: (modelId, entry) => invoke("log_print", { modelId, entry }),
     deletePrint: (printId) => invoke("delete_print", { printId }),

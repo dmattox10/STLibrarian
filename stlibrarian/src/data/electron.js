@@ -21,6 +21,7 @@
  *     duplicates(), creators(), setProvenance(modelId, creator, source),
  *     modelRenders(modelId), setModelRender(modelId, imageId),
  *     prints(modelId), logPrint(modelId, entry), deletePrint(printId),
+ *     openInSlicer(modelId), revealInFolder(modelId),
  *     readModel(id) -> ArrayBuffer,
  *     readPreview(id, maxTriangles) -> ArrayBuffer,  // decimated positions
  *     pickFolder() -> string | null,
@@ -85,6 +86,9 @@ export function createElectronAdapter(bridge = globalThis.window?.stlibrarian) {
 
     modelRenders: (modelId) => bridge.modelRenders(modelId),
     setModelRender: (modelId, imageId) => bridge.setModelRender(modelId, imageId),
+
+    openInSlicer: bridge.openInSlicer ? (id) => bridge.openInSlicer(id) : null,
+    revealInFolder: bridge.revealInFolder ? (id) => bridge.revealInFolder(id) : null,
 
     prints: (modelId) => bridge.prints(modelId),
     logPrint: (modelId, entry) => bridge.logPrint(modelId, entry),

@@ -137,12 +137,48 @@ export default function Inspector({ api, model, onClose, onChanged, canDelete })
 
       <StlViewer api={api} model={model} />
 
+      {api.openInSlicer || api.revealInFolder ? (
+        <div className="row">
+          {api.openInSlicer ? (
+            <Button
+              size="sm"
+              onClick={() => api.openInSlicer(model.id).catch((e) => setError(e?.message))}
+              title="Open with whatever handles this file type"
+            >
+              Open in slicer
+            </Button>
+          ) : null}
+          {api.revealInFolder ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => api.revealInFolder(model.id).catch((e) => setError(e?.message))}
+            >
+              Show in Finder
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       <Panel title="Details">
         <dl className="gc-kv">
           <dt>Size</dt>
           <dd>{formatBytes(model.size)}</dd>
           <dt>Triangles</dt>
           <dd>{formatCount(model.triangles)}</dd>
+          {model.variant ? (
+            <>
+              <dt>Variant</dt>
+              <dd
+                style={{
+                  color:
+                    model.variant === "supported" ? "var(--nord14)" : "var(--nord9)",
+                }}
+              >
+                {model.variant}
+              </dd>
+            </>
+          ) : null}
           <dt>Bounds</dt>
           <dd>{formatDims(model)}</dd>
           {formatVolume(model.volume) ? (

@@ -339,6 +339,31 @@ PRINT_ID="$(api "$BASE/api/models/$HERO_ID/prints" | jfirst id)"
 check "deleting one attempt"     "$(api_code -X DELETE "$BASE/api/prints/$PRINT_ID")" 204
 check "  the other survives"     "$(api "$BASE/api/models/$HERO_ID" | jfield print_count)" 1
 
+echo "== variants and other formats =="
+mkdir -p "$WORK/models/Pack/Presupported"
+cp "$WORK/models/cube.stl" "$WORK/models/Pack/Presupported/knight.stl"
+cat > "$WORK/models/Pack/tetra.obj" <<'PYOBJ'
+v 0 0 0
+v 2 0 0
+v 0 3 0
+v 0 0 4
+f 1 2 3
+f 1 2 4
+f 2 3 4
+f 1 3 4
+PYOBJ
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+
+check "obj indexed"              "$(api "$BASE/api/models?search=tetra" | jlen)" 1
+check "  triangles counted"      "$(api "$BASE/api/models?search=tetra" | jfirst triangles)" 4
+check "  bounds measured"        "$(api "$BASE/api/models?search=tetra" | python3 -c 'import sys,json;m=json.load(sys.stdin)[0];print("%gx%gx%g" % (m["dim_x"],m["dim_y"],m["dim_z"]))')" "2x3x4"
+check "  and it previews"        "$(api_code "$BASE/api/thumb/$(api "$BASE/api/models?search=tetra" | jfirst hash)")" 200
+
+check "presupported detected"    "$(api "$BASE/api/models?search=knight" | jfirst variant)" "supported"
+check "unsupported detected"     "$(api "$BASE/api/models?search=body" | jfirst variant)" "unsupported"
+check "filter by variant"        "$(api "$BASE/api/models?variant=supported" | jlen)" 1
+check "  the two do not overlap" "$(api "$BASE/api/models?variant=unsupported" | python3 -c 'import sys,json;print(sum(1 for m in json.load(sys.stdin) if m["variant"]!="unsupported"))')" 0
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"

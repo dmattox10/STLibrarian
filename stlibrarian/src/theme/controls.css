@@ -1177,3 +1177,16 @@
   outline: none;
   box-shadow: 0 0 0 2px var(--glow);
 }
+
+/* Presupported copies are marked, because printing the wrong one of a
+   creator's two versions costs an evening. */
+.gc-card__variant {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--nord0);
+  background: var(--nord14);
+}

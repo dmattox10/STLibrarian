@@ -65,6 +65,7 @@ export function createHttpAdapter(baseUrl = "") {
     if (query.package != null) params.set("package", String(query.package));
     if (query.creator) params.set("creator", query.creator);
     if (query.printed != null) params.set("printed", String(query.printed));
+    if (query.variant) params.set("variant", query.variant);
     if (query.sort) params.set("sort", query.sort);
     if (query.limit != null) params.set("limit", String(query.limit));
     if (query.offset != null) params.set("offset", String(query.offset));
@@ -158,6 +159,11 @@ export function createHttpAdapter(baseUrl = "") {
     modelRenders: (modelId) => request(`/api/models/${modelId}/renders`),
     setModelRender: (modelId, imageId) =>
       request(`/api/models/${modelId}/render`, { method: "POST", body: { image_id: imageId } }),
+
+    // The files live on the server, not on whatever machine is browsing, so
+    // there is nothing here for a slicer to open.
+    openInSlicer: null,
+    revealInFolder: null,
 
     prints: (modelId) => request(`/api/models/${modelId}/prints`),
     logPrint: (modelId, entry) =>

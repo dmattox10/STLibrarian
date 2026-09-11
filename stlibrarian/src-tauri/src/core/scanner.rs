@@ -42,7 +42,7 @@ where
             index_image(conn, entry.path());
             continue;
         }
-        if !is_stl(entry.path()) {
+        if !stl::is_supported_mesh(entry.path()) {
             continue;
         }
         match index_file(conn, entry.path(), Path::new(root)) {
@@ -83,12 +83,39 @@ where
     report
 }
 
-/// Case-insensitive on purpose: `.STL` is what most model sites hand you.
-fn is_stl(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("stl"))
-        .unwrap_or(false)
+/// Which of a creator's two copies this is.
+///
+/// Packs ship the same model twice -- presupported for resin, bare for anyone
+/// who wants to place their own -- and printing the wrong one wastes an
+/// evening. The nearest name wins, so a file inside `Unsupported/` is
+/// unsupported even if the pack folder above it says otherwise.
+pub(crate) fn detect_variant(path: &Path) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        names.push(stem.to_string());
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if let Some(n) = ancestor.file_name().and_then(|s| s.to_str()) {
+            names.push(n.to_string());
+        }
+    }
+
+    for name in names {
+        let flat: String = name
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        // "unsupported" contains "supported", so it has to be tested first or
+        // every unsupported file is labelled the opposite of what it is.
+        if flat.contains("unsupported") {
+            return "unsupported".to_string();
+        }
+        if flat.contains("presupported") || flat.contains("supported") {
+            return "supported".to_string();
+        }
+    }
+    String::new()
 }
 
 /// Formats a creator is likely to ship a render in.
@@ -164,6 +191,7 @@ fn index_file(conn: &Connection, path: &Path, root: &Path) -> Result<Upsert, Str
         f64::from(geometry.volume),
         mtime,
         (&creator, &source),
+        &detect_variant(path),
     )
     .map_err(|e| e.to_string())?;
 
@@ -236,13 +264,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stl_extension_matching_is_case_insensitive() {
-        assert!(is_stl(Path::new("/a/b/Benchy.stl")));
-        assert!(is_stl(Path::new("/a/b/Benchy.STL")));
-        assert!(is_stl(Path::new("/a/b/Benchy.Stl")));
-        assert!(!is_stl(Path::new("/a/b/Benchy.3mf")));
-        assert!(!is_stl(Path::new("/a/b/stl")));
-        assert!(!is_stl(Path::new("/a/b/notes.txt")));
+    fn mesh_extension_matching_is_case_insensitive() {
+        for good in ["/a/Benchy.stl", "/a/Benchy.STL", "/a/Benchy.Stl", "/a/Benchy.obj", "/a/B.OBJ"] {
+            assert!(stl::is_supported_mesh(Path::new(good)), "{}", good);
+        }
+        for bad in ["/a/Benchy.3mf", "/a/stl", "/a/notes.txt"] {
+            assert!(!stl::is_supported_mesh(Path::new(bad)), "{}", bad);
+        }
+    }
+
+    #[test]
+    fn the_nearest_folder_decides_the_variant() {
+        assert_eq!(detect_variant(Path::new("/l/Pack/Unsupported/a.stl")), "unsupported");
+        assert_eq!(detect_variant(Path::new("/l/Pack/Presupported/a.stl")), "supported");
+        assert_eq!(detect_variant(Path::new("/l/Pack/Supported/a.stl")), "supported");
+        assert_eq!(detect_variant(Path::new("/l/Throk_130mm_Unsupported/a.stl")), "unsupported");
+        assert_eq!(detect_variant(Path::new("/l/Pack/a_presupported.stl")), "supported");
+        assert_eq!(detect_variant(Path::new("/l/Pack/plain.stl")), "");
+    }
+
+    /// The trap: "unsupported" ends with "supported".
+    #[test]
+    fn unsupported_is_never_mistaken_for_supported() {
+        assert_eq!(detect_variant(Path::new("/l/Unsupported/x.stl")), "unsupported");
+        // And the closest name wins over one further up.
+        assert_eq!(
+            detect_variant(Path::new("/l/Supported Pack/Unsupported/x.stl")),
+            "unsupported"
+        );
     }
 
     #[test]
