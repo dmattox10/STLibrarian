@@ -53,19 +53,61 @@ pub const THUMB_SIZE: u32 = 512;
 ///
 /// This is what lets a headless server build its own previews. Nothing here
 /// needs a GPU, a window, or a client to have visited.
-pub fn ensure(hash: &str, source: &std::path::Path) -> Result<Vec<u8>, String> {
+pub fn ensure(
+    hash: &str,
+    source: &std::path::Path,
+    render: Option<&std::path::Path>,
+) -> Result<Vec<u8>, String> {
     if !is_valid_hash(hash) {
         return Err("Invalid model hash".into());
     }
     if let Some(cached) = read_png(hash) {
         return Ok(cached);
     }
-    let png = crate::core::raster::render(source, THUMB_SIZE)
-        .map_err(|e| format!("Could not render preview: {}", e))?;
+    // A creator's own render is posed, lit and often painted. Nothing derived
+    // from the raw mesh competes with that, so it is used when one exists and
+    // the rasteriser is the fallback rather than the default.
+    let from_render = render.map(downscale).transpose().unwrap_or_else(|e| {
+        // Falling back is right -- a broken render should still leave you with
+        // a usable preview -- but it must be audible, or a mislabelled file
+        // looks exactly like a working one.
+        log::warn!("Falling back to the mesh: {}", e);
+        None
+    });
+    let png = match from_render {
+        Some(png) => png,
+        None => crate::core::raster::render(source, THUMB_SIZE)
+            .map_err(|e| format!("Could not render preview: {}", e))?,
+    };
     std::fs::create_dir_all(thumb_dir()).map_err(|e| e.to_string())?;
     // Content-addressed, so a written preview can never be stale.
     std::fs::write(thumb_path(hash), &png).map_err(|e| e.to_string())?;
     Ok(png)
+}
+
+/// Decode a creator's render and shrink it to thumbnail size.
+///
+/// Serving the original would mean a few megabytes per card; a folder of promo
+/// JPEGs is not a sprite sheet.
+fn downscale(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    // Format sniffed from content, not from the extension.
+    //
+    // `image::open` picks a decoder by file extension, and model packs are
+    // full of PNGs named .jpg. Getting that wrong fails the decode, which then
+    // falls through to the mesh renderer -- so the creator's own artwork is
+    // silently ignored and everything still looks like it worked.
+    let img = image::ImageReader::open(path)
+        .map_err(|e| format!("Could not open {}: {}", path.display(), e))?
+        .with_guessed_format()
+        .map_err(|e| format!("Could not read {}: {}", path.display(), e))?
+        .decode()
+        .map_err(|e| format!("Could not decode {}: {}", path.display(), e))?;
+    let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE);
+    let mut out = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 pub fn read_png(hash: &str) -> Option<Vec<u8>> {
@@ -113,6 +155,65 @@ pub fn prune(live_hashes: &HashSet<String>) -> usize {
 mod tests {
     use super::*;
 
+    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+        // Encoded with the png crate rather than hand-rolled, so the test is
+        // about the decoder's behaviour and not about my zlib.
+        let mut raw = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                raw.extend_from_slice(&[(x % 256) as u8, (y % 256) as u8, 128]);
+            }
+        }
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w, h);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().unwrap();
+            w.write_image_data(&raw).unwrap();
+        }
+        out
+    }
+
+    fn tmp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("stlib_thumb_{}_{}", std::process::id(), name));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    /// Model packs are full of PNGs named .jpg.
+    ///
+    /// Choosing a decoder by extension fails on those, and because a failed
+    /// render falls back to the mesh, the creator's artwork gets silently
+    /// ignored while everything still looks like it worked.
+    #[test]
+    fn a_png_named_jpg_still_decodes() {
+        let p = tmp_file("mislabelled.jpg", &png_bytes(300, 200));
+        let thumb = downscale(&p).expect("content, not extension, decides the decoder");
+        assert_eq!(&thumb[0..4], &[0x89, b'P', b'N', b'G']);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn a_large_render_is_shrunk_to_thumbnail_size() {
+        let p = tmp_file("big.png", &png_bytes(1600, 1200));
+        let thumb = downscale(&p).unwrap();
+        // IHDR width/height live at a fixed offset in every PNG.
+        let w = u32::from_be_bytes([thumb[16], thumb[17], thumb[18], thumb[19]]);
+        let h = u32::from_be_bytes([thumb[20], thumb[21], thumb[22], thumb[23]]);
+        assert!(w <= THUMB_SIZE && h <= THUMB_SIZE, "got {}x{}", w, h);
+        // Aspect ratio preserved, so the render is not squashed.
+        assert!((w as f32 / h as f32 - 1600.0 / 1200.0).abs() < 0.05);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn something_that_is_not_an_image_is_an_error_not_a_panic() {
+        let p = tmp_file("notanimage.jpg", b"this is a readme, not a render");
+        assert!(downscale(&p).is_err());
+        std::fs::remove_file(p).ok();
+    }
+
     #[test]
     fn only_64_char_lowercase_hex_is_accepted() {
         let good = "a".repeat(64);
@@ -154,5 +255,16 @@ mod tests {
 
         assert!(save(&hash, "data:image/png;base64,!!!not base64!!!").is_err());
         assert!(save(&hash, "data:image/png;base64,").is_err());
+    }
+}
+
+/// Drop a cached preview so the next request rebuilds it.
+///
+/// Needed when the *choice* of preview changes -- picking a creator's render
+/// over the generated one -- because the cache is keyed by content hash and
+/// the model's bytes have not changed at all.
+pub fn forget(hash: &str) {
+    if is_valid_hash(hash) {
+        std::fs::remove_file(thumb_path(hash)).ok();
     }
 }

@@ -260,6 +260,63 @@ check "  and reads back"               "$(api "$BASE/api/models/$WIDGET_ID" | jf
 check "deleting a package keeps files"  "$(api_code -X DELETE "$BASE/api/packages/$PKG_ID")" 204
 check "  the files are still indexed"   "$(api "$BASE/api/models?search=body" | jlen)" 1
 
+echo "== creator renders =="
+# A folder holding a model and the creator's promo shot beside it.
+mkdir -p "$WORK/models/Creator/Hero"
+# A distinct cube: identical content would share a hash with an earlier
+# fixture, and previews are content-addressed, so the two would share a
+# cached picture and the assertions below would be testing nothing.
+python3 - "$WORK/models/Creator/Hero/hero.stl" <<'PYHERO'
+import struct, sys, pathlib
+s = 17.0
+p = [[0,0,0],[s,0,0],[s,s,0],[0,s,0],[0,0,s],[s,0,s],[s,s,s],[0,s,s]]
+faces = [(0,1,2),(0,2,3),(4,6,5),(4,7,6),(0,5,1),(0,4,5),
+         (1,6,2),(1,5,6),(2,7,3),(2,6,7),(3,4,0),(3,7,4)]
+out = bytearray(b"\0"*80) + struct.pack("<I", len(faces))
+for a,b,c in faces:
+    out += b"\0"*12
+    for v in (p[a],p[b],p[c]): out += struct.pack("<3f", *v)
+    out += b"\0\0"
+pathlib.Path(sys.argv[1]).write_bytes(bytes(out))
+PYHERO
+python3 - "$WORK/models/Creator/Hero/hero.jpg" <<'PYIMG'
+import zlib, struct, sys, pathlib
+# A real PNG (written with a .jpg name on purpose: the decoder must go by
+# content, not by extension, because creators mislabel files constantly).
+w = h = 240
+rows = b"".join(b"\x00" + bytes([(x * 255) // w, (y * 255) // h, 128] * 1) * w
+                for y in range(h) for x in [0])
+raw = b"".join(b"\x00" + b"".join(bytes([(x*255)//w, (y*255)//h, 128]) for x in range(w)) for y in range(h))
+def chunk(tag, data):
+    c = tag + data
+    return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
+png = (b"\x89PNG\r\n\x1a\n"
+       + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw))
+       + chunk(b"IEND", b""))
+pathlib.Path(sys.argv[1]).write_bytes(png)
+PYIMG
+post "$BASE/api/scan" "$SCAN_BODY" >/dev/null
+
+HERO_ID="$(api "$BASE/api/models?search=hero" | jfirst id)"
+HERO_HASH="$(api "$BASE/api/models?search=hero" | jfirst hash)"
+check "render matched to the model" "$(api "$BASE/api/models/$HERO_ID" | python3 -c 'import sys,json;print("yes" if json.load(sys.stdin)["render"] else "no")')" "yes"
+check "  offered as a choice"       "$(api "$BASE/api/models/$HERO_ID/renders" | jlen)" 1
+check "  preview serves"            "$(api_code "$BASE/api/thumb/$HERO_HASH")" 200
+check "  and is a PNG"              "$(api "$BASE/api/thumb/$HERO_HASH" | head -c 4 | tail -c 3)" "PNG"
+RENDER_SIZE="$(api "$BASE/api/thumb/$HERO_HASH" | wc -c | tr -d ' ')"
+
+check "can revert to the mesh"      "$(post_code "$BASE/api/models/$HERO_ID/render" '{"image_id":null}')" 204
+check "  render is cleared"         "$(api "$BASE/api/models/$HERO_ID" | python3 -c 'import sys,json;print("yes" if json.load(sys.stdin)["render"] else "no")')" "no"
+MESH_SIZE="$(api "$BASE/api/thumb/$HERO_HASH" | wc -c | tr -d ' ')"
+# Compared in bash: interpolating a shell variable into a single-quoted
+# python -c inside a command substitution is the quoting trap this script
+# already has a warning about at the top.
+check "  preview was rebuilt"       "$([ "$MESH_SIZE" != "$RENDER_SIZE" ] && echo changed || echo same)" "changed"
+
+# Only a model with no render of its own falls back to the rasteriser.
+check "models without a render still draw" "$(api_code "$BASE/api/thumb/$CUBE_HASH")" 200
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "RESULT FAIL - $pass passed, $fail failed"

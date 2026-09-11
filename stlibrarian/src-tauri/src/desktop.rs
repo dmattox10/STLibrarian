@@ -149,6 +149,28 @@ fn unassign_from_package(model_ids: Vec<i64>) -> Result<usize, String> {
     db::unassign_from_package(&c, &model_ids).map_err(|e| e.to_string())
 }
 
+// --------------------------------------------------------------- renders ----
+
+#[command]
+fn model_renders(model_id: i64) -> Result<Vec<(i64, String)>, String> {
+    let c = conn()?;
+    db::images_near_model(&c, model_id).map_err(|e| e.to_string())
+}
+
+/// Choose a render, or pass null to go back to the generated preview.
+#[command]
+fn set_model_render(model_id: i64, image_id: Option<i64>) -> Result<(), String> {
+    let c = conn()?;
+    let model = db::get_model(&c, model_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No such model".to_string())?;
+    db::set_model_image(&c, model_id, image_id).map_err(|e| e.to_string())?;
+    // The cached thumbnail is keyed by content hash and the content has not
+    // changed, so nothing else would invalidate it.
+    thumbs::forget(&model.hash);
+    Ok(())
+}
+
 // ---------------------------------------------------------- duplicates ----
 
 #[command]
@@ -195,7 +217,13 @@ async fn get_thumb(hash: String) -> Option<String> {
         }
         let conn = db::open_default().ok()?;
         let path = db::path_for_hash(&conn, &hash).ok().flatten()?;
-        thumbs::ensure(&hash, std::path::Path::new(&path)).ok()?;
+        let render = db::image_for_hash(&conn, &hash).ok().flatten();
+        thumbs::ensure(
+            &hash,
+            std::path::Path::new(&path),
+            render.as_deref().map(std::path::Path::new),
+        )
+        .ok()?;
         thumbs::load_data_url(&hash)
     })
     .await
@@ -321,6 +349,8 @@ pub fn run() {
             assign_to_package,
             unassign_from_package,
             duplicates,
+            model_renders,
+            set_model_render,
             set_provenance,
             creators,
             get_thumb,

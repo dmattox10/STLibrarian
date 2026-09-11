@@ -61,6 +61,14 @@ fn migrate(conn: &Connection) -> Result<()> {
             role          TEXT NOT NULL DEFAULT 'user',
             created_at    INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS images (
+            id    INTEGER PRIMARY KEY,
+            path  TEXT UNIQUE NOT NULL,
+            name  TEXT NOT NULL,
+            dir   TEXT NOT NULL,
+            size  INTEGER NOT NULL,
+            mtime INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS packages (
             id         INTEGER PRIMARY KEY,
             name       TEXT NOT NULL,
@@ -106,6 +114,12 @@ fn migrate(conn: &Connection) -> Result<()> {
         // Nullable on purpose: a file belongs to a package only if someone
         // decided it does. Scanning never assumes a folder is one model.
         ("package_id", "INTEGER"),
+        // Denormalised so image matching is a join rather than string work in
+        // Rust over every row.
+        ("dir", "TEXT NOT NULL DEFAULT ''"),
+        ("parent_dir", "TEXT NOT NULL DEFAULT ''"),
+        // A creator's own render, when the folder shipped one.
+        ("image_id", "INTEGER"),
     ] {
         if !has_column(conn, "models", column) {
             conn.execute_batch(&format!(
@@ -126,6 +140,8 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_coll_models_model ON collection_models(model_id);
         CREATE INDEX IF NOT EXISTS idx_models_package ON models(package_id);
         CREATE INDEX IF NOT EXISTS idx_models_creator ON models(creator);
+        CREATE INDEX IF NOT EXISTS idx_models_dir ON models(dir);
+        CREATE INDEX IF NOT EXISTS idx_images_dir ON images(dir);
         ",
     )?;
     Ok(())
@@ -152,6 +168,14 @@ pub fn upsert_model(
     mtime: i64,
     provenance: (&str, &str),
 ) -> Result<(i64, Upsert)> {
+    let dir = Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent_dir = Path::new(&dir)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     let existing: Option<(i64, String, i64)> = conn
         .query_row(
             "SELECT id, hash, mtime FROM models WHERE path = ?1",
@@ -177,11 +201,11 @@ pub fn upsert_model(
 
     conn.execute(
         "INSERT INTO models (path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime,
-                             volume, creator, source)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                             volume, creator, source, dir, parent_dir)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             path, name, size, hash, triangles, dims[0], dims[1], dims[2], mtime, volume,
-            provenance.0, provenance.1
+            provenance.0, provenance.1, dir, parent_dir
         ],
     )?;
     Ok((conn.last_insert_rowid(), Upsert::Added))
@@ -190,7 +214,8 @@ pub fn upsert_model(
 pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecord>> {
     let mut sql = String::from(
         "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
-                volume, creator, source, package_id
+                volume, creator, source, package_id,
+                (SELECT path FROM images WHERE id = models.image_id)
          FROM models WHERE 1=1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -273,6 +298,7 @@ pub fn list_models(conn: &Connection, q: &LibraryQuery) -> Result<Vec<ModelRecor
             creator: row.get(12)?,
             source: row.get(13)?,
             package_id: row.get(14)?,
+            render: row.get(15)?,
             tags: Vec::new(),
             collections: Vec::new(),
         })
@@ -325,7 +351,8 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
     let found: Option<ModelRecord> = conn
         .query_row(
             "SELECT id, path, name, size, hash, triangles, dim_x, dim_y, dim_z, mtime, has_thumb,
-                    volume, creator, source, package_id
+                    volume, creator, source, package_id,
+                    (SELECT path FROM images WHERE id = models.image_id)
              FROM models WHERE id = ?1",
             params![id],
             |row| {
@@ -345,6 +372,7 @@ pub fn get_model(conn: &Connection, id: i64) -> Result<Option<ModelRecord>> {
                     creator: row.get(12)?,
                     source: row.get(13)?,
                     package_id: row.get(14)?,
+                    render: row.get(15)?,
                     tags: Vec::new(),
                     collections: Vec::new(),
                 })
@@ -863,6 +891,100 @@ mod tests {
         assert!(list_packages(&conn).unwrap().is_empty());
         let still = get_model(&conn, a).unwrap().expect("model survives");
         assert!(still.package_id.is_none());
+    }
+
+    // --------------------------------------------------------- renders ----
+
+    fn add_image(conn: &Connection, path: &str, size: i64) {
+        let name = std::path::Path::new(path)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        upsert_image(conn, path, &name, size, 0).unwrap();
+    }
+
+    #[test]
+    fn a_render_beside_a_model_is_matched_to_it() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/hero.stl", 10, "a");
+        add_image(&conn, "/lib/Hero/hero.jpg", 500_000);
+
+        assert_eq!(match_images(&conn).unwrap(), 1);
+        assert!(get_model(&conn, id).unwrap().unwrap().render.is_some());
+    }
+
+    #[test]
+    fn the_render_named_after_the_model_wins_over_a_bigger_one() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/hero.stl", 10, "a");
+        add_image(&conn, "/lib/Hero/group shot.jpg", 9_000_000);
+        add_image(&conn, "/lib/Hero/hero.jpg", 100_000);
+
+        match_images(&conn).unwrap();
+        let render = get_model(&conn, id).unwrap().unwrap().render.unwrap();
+        assert!(render.ends_with("hero.jpg"), "picked {}", render);
+    }
+
+    #[test]
+    fn without_a_name_match_the_largest_render_wins() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/body.stl", 10, "a");
+        add_image(&conn, "/lib/Hero/icon.png", 20_000);
+        add_image(&conn, "/lib/Hero/hero shot.jpg", 4_000_000);
+
+        match_images(&conn).unwrap();
+        let render = get_model(&conn, id).unwrap().unwrap().render.unwrap();
+        assert!(render.ends_with("hero shot.jpg"), "picked {}", render);
+    }
+
+    /// Creators often keep one render beside the folder of parts.
+    #[test]
+    fn a_render_one_level_up_is_used_when_the_folder_has_none() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Throk/Unsupported/body.stl", 10, "a");
+        add_image(&conn, "/lib/Throk/promo.jpg", 500_000);
+
+        assert_eq!(match_images(&conn).unwrap(), 1);
+        assert!(get_model(&conn, id).unwrap().unwrap().render.is_some());
+    }
+
+    #[test]
+    fn the_models_own_folder_beats_the_one_above_it() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Throk/Unsupported/body.stl", 10, "a");
+        add_image(&conn, "/lib/Throk/promo.jpg", 9_000_000);
+        add_image(&conn, "/lib/Throk/Unsupported/closer.jpg", 50_000);
+
+        match_images(&conn).unwrap();
+        let render = get_model(&conn, id).unwrap().unwrap().render.unwrap();
+        assert!(render.ends_with("closer.jpg"), "picked {}", render);
+    }
+
+    #[test]
+    fn a_model_with_no_render_nearby_keeps_none() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Alone/a.stl", 10, "a");
+        add_image(&conn, "/lib/Elsewhere/pic.jpg", 500_000);
+
+        assert_eq!(match_images(&conn).unwrap(), 0);
+        assert!(get_model(&conn, id).unwrap().unwrap().render.is_none());
+    }
+
+    /// A choice made by hand must survive the next scan.
+    #[test]
+    fn matching_does_not_override_a_chosen_render() {
+        let conn = db();
+        let id = model_at(&conn, "/lib/Hero/hero.stl", 10, "a");
+        add_image(&conn, "/lib/Hero/hero.jpg", 500_000);
+        add_image(&conn, "/lib/Hero/other.jpg", 900_000);
+        let others = images_near_model(&conn, id).unwrap();
+        let chosen = others.iter().find(|(_, p)| p.ends_with("other.jpg")).unwrap().0;
+
+        set_model_image(&conn, id, Some(chosen)).unwrap();
+        assert_eq!(match_images(&conn).unwrap(), 0, "already set, so nothing to do");
+        let render = get_model(&conn, id).unwrap().unwrap().render.unwrap();
+        assert!(render.ends_with("other.jpg"), "picked {}", render);
     }
 
     // ----------------------------------------------------- duplicates ----
@@ -1517,4 +1639,161 @@ pub fn list_creators(conn: &Connection) -> Result<Vec<TagCount>> {
         })
     })?;
     Ok(rows.flatten().collect())
+}
+
+// ----------------------------------------------------------------- images ----
+
+pub fn upsert_image(
+    conn: &Connection,
+    path: &str,
+    name: &str,
+    size: i64,
+    mtime: i64,
+) -> Result<()> {
+    let dir = Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    conn.execute(
+        "INSERT INTO images (path, name, dir, size, mtime) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(path) DO UPDATE SET size = ?4, mtime = ?5",
+        params![path, name, dir, size, mtime],
+    )?;
+    Ok(())
+}
+
+/// Point every model that does not have one at the best render beside it.
+///
+/// Creators ship promo images in the same folder as the STLs, and one of those
+/// beats anything generated from the mesh -- it is posed, lit, often painted.
+///
+/// Two passes, because renders sometimes sit one level up from the parts: the
+/// model's own folder wins, and only then the folder above it.
+pub fn match_images(conn: &Connection) -> Result<usize> {
+    // Ranked in Rust, not in SQL.
+    //
+    // The natural query correlates the subquery's ORDER BY against the outer
+    // row -- "prefer the image whose name equals this model's name" -- and
+    // SQLite will not resolve an outer column there: it fails with "no such
+    // column: m.dir". Two SELECTs and a HashMap are clearer than fighting it,
+    // and this runs once per scan over a set that fits in memory comfortably.
+    let mut by_dir: HashMap<String, Vec<(i64, String, i64)>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT id, dir, name, size FROM images")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        for (id, dir, name, size) in rows.flatten() {
+            by_dir.entry(dir).or_default().push((id, name, size));
+        }
+    }
+    if by_dir.is_empty() {
+        return Ok(0);
+    }
+
+    // A render named after the model is the one the creator meant; failing
+    // that the largest file is the hero shot rather than an icon.
+    let best = |candidates: &[(i64, String, i64)], model_name: &str| -> Option<i64> {
+        candidates
+            .iter()
+            .max_by_key(|(_, name, size)| {
+                let named_for_model = name.eq_ignore_ascii_case(model_name);
+                (named_for_model, *size)
+            })
+            .map(|(id, _, _)| *id)
+    };
+
+    let wanted: Vec<(i64, String, String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, dir, parent_dir, hash FROM models WHERE image_id IS NULL",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+        rows.flatten().collect()
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let mut matched = 0usize;
+    let mut newly_rendered: Vec<String> = Vec::new();
+    {
+        let mut set = tx.prepare("UPDATE models SET image_id = ?2 WHERE id = ?1")?;
+        for (model_id, name, dir, parent_dir, hash) in wanted {
+            // The model's own folder wins; only then the folder above it,
+            // where creators often keep one render for a set of parts.
+            let chosen = by_dir
+                .get(&dir)
+                .and_then(|c| best(c, &name))
+                .or_else(|| by_dir.get(&parent_dir).and_then(|c| best(c, &name)));
+            if let Some(image_id) = chosen {
+                set.execute(params![model_id, image_id])?;
+                newly_rendered.push(hash);
+                matched += 1;
+            }
+        }
+    }
+    tx.commit()?;
+
+    // Previews are keyed by content hash, and gaining a render does not change
+    // a single byte of the mesh -- so nothing else would ever invalidate them.
+    // Without this a model whose bytes were already previewed keeps the
+    // generated picture forever, even once the creator's own render is sitting
+    // next to it.
+    for hash in newly_rendered {
+        crate::core::thumbs::forget(&hash);
+    }
+    Ok(matched)
+}
+
+/// The render chosen for a model, if any.
+pub fn image_for_model(conn: &Connection, model_id: i64) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT i.path FROM models m JOIN images i ON i.id = m.image_id WHERE m.id = ?1",
+        params![model_id],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+pub fn image_for_hash(conn: &Connection, hash: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT i.path FROM models m JOIN images i ON i.id = m.image_id
+         WHERE m.hash = ?1 AND m.image_id IS NOT NULL LIMIT 1",
+        params![hash],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Every render sitting beside a model, so the inspector can offer a choice.
+pub fn images_near_model(conn: &Connection, model_id: i64) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT i.id, i.path FROM images i, models m
+         WHERE m.id = ?1 AND (i.dir = m.dir OR i.dir = m.parent_dir)
+         ORDER BY i.size DESC",
+    )?;
+    let rows = stmt.query_map(params![model_id], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
+    Ok(rows.flatten().collect())
+}
+
+/// Choose a render by hand, or pass None to go back to the generated preview.
+pub fn set_model_image(conn: &Connection, model_id: i64, image_id: Option<i64>) -> Result<()> {
+    conn.execute(
+        "UPDATE models SET image_id = ?2 WHERE id = ?1",
+        params![model_id, image_id],
+    )?;
+    Ok(())
 }

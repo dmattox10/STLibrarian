@@ -469,6 +469,37 @@ async fn unassign_package_route(Json(req): Json<ModelIdsReq>) -> Result<Json<Cha
         .map(|changed| Json(Changed { changed }))
 }
 
+// --------------------------------------------------------------- renders ----
+
+#[derive(Deserialize)]
+struct RenderReq {
+    /// null puts the model back on its generated preview.
+    image_id: Option<i64>,
+}
+
+async fn model_renders_route(Path(id): Path<i64>) -> Result<Json<Vec<(i64, String)>>, ApiError> {
+    with_db(move |conn| db::images_near_model(conn, id).map_err(|e| e.to_string()))
+        .await
+        .map(Json)
+}
+
+async fn set_render_route(
+    Path(id): Path<i64>,
+    Json(req): Json<RenderReq>,
+) -> Result<StatusCode, ApiError> {
+    with_db(move |conn| {
+        let model = db::get_model(conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No such model".to_string())?;
+        db::set_model_image(conn, id, req.image_id).map_err(|e| e.to_string())?;
+        // Cached by content hash, and the content did not change.
+        thumbs::forget(&model.hash);
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ------------------------------------------------------------ duplicates ----
 
 async fn duplicates_route() -> Result<Json<Vec<DuplicateGroup>>, ApiError> {
@@ -530,7 +561,15 @@ async fn get_thumb_route(Path(hash): Path<String>) -> Result<Response, ApiError>
             return Ok(Some(cached));
         }
         match db::path_for_hash(conn, &hash).map_err(|e| e.to_string())? {
-            Some(path) => thumbs::ensure(&hash, std::path::Path::new(&path)).map(Some),
+            Some(path) => {
+                let render = db::image_for_hash(conn, &hash).map_err(|e| e.to_string())?;
+                thumbs::ensure(
+                    &hash,
+                    std::path::Path::new(&path),
+                    render.as_deref().map(std::path::Path::new),
+                )
+                .map(Some)
+            }
             None => Ok(None),
         }
     })
@@ -619,6 +658,8 @@ async fn main() {
         .route("/packages/{id}", delete(delete_package_route))
         .route("/packages/{id}/models", post(assign_package_route))
         .route("/duplicates", get(duplicates_route))
+        .route("/models/{id}/renders", get(model_renders_route))
+        .route("/models/{id}/render", post(set_render_route))
         .route("/creators", get(creators_route))
         .route("/models/{id}/provenance", post(set_provenance_route))
         .route("/bulk/packages/unassign", post(unassign_package_route))

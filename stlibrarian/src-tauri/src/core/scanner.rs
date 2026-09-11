@@ -33,7 +33,16 @@ where
         .into_iter()
         .filter_map(std::result::Result::ok)
     {
-        if !entry.file_type().is_file() || !is_stl(entry.path()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if is_image(entry.path()) {
+            // Indexed but not counted: a promo render is not a model, it is
+            // how a model gets a better thumbnail than the mesh can give it.
+            index_image(conn, entry.path());
+            continue;
+        }
+        if !is_stl(entry.path()) {
             continue;
         }
         match index_file(conn, entry.path(), Path::new(root)) {
@@ -57,6 +66,14 @@ where
         }
     }
 
+    // Renders are matched once the models exist, so ordering within the walk
+    // does not matter.
+    match crate::core::db::match_images(conn) {
+        Ok(n) if n > 0 => info!("Matched {} models to creator renders", n),
+        Err(e) => warn!("Could not match renders: {}", e),
+        _ => {}
+    }
+
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     info!(
         "Scan finished: +{} ~{} ={} !{} in {}ms",
@@ -72,6 +89,48 @@ fn is_stl(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("stl"))
         .unwrap_or(false)
+}
+
+/// Formats a creator is likely to ship a render in.
+fn is_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            e == "jpg" || e == "jpeg" || e == "png" || e == "webp"
+        })
+        .unwrap_or(false)
+}
+
+fn index_image(conn: &Connection, path: &Path) {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    // Skip anything too small to be a promo shot -- icons, watermarks, the
+    // creator's logo repeated in every folder.
+    if meta.len() < 8 * 1024 {
+        return;
+    }
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if let Err(e) = crate::core::db::upsert_image(
+        conn,
+        &path.to_string_lossy(),
+        &name,
+        meta.len() as i64,
+        mtime,
+    ) {
+        warn!("Could not index image {}: {}", path.display(), e);
+    }
 }
 
 fn index_file(conn: &Connection, path: &Path, root: &Path) -> Result<Upsert, String> {

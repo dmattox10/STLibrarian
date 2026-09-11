@@ -23,6 +23,9 @@ pub struct ModelRecord {
     pub source: String,
     /// Set only when someone groups files together; scanning never assumes it.
     pub package_id: Option<i64>,
+    /// A creator's render sitting beside the file, used as the preview when
+    /// present. None means the preview is drawn from the mesh.
+    pub render: Option<String>,
     pub mtime: i64,
     pub tags: Vec<String>,
     /// Names of the collections holding this model. Denormalised onto the row
