@@ -17,7 +17,7 @@
   --edge:#434c5e; --edge-soft:#39404f; --hard:#171b22;
   --ink:#e5e9f0; --ink-body:#c6cedb; --ink-dim:#8a93a5; --gold:#ebcb8b;
   --frost:#88c0d0; --frost-deep:#5e81ac; --frost-pale:#8fbcbb;
-  --good:#a3be8c; --warn:#ebcb8b; --violet:#b48ead;
+  --good:#a3be8c; --warn:#ebcb8b; --violet:#b48ead; --red:#bf616a;
   --display:"Archivo","Helvetica Neue",Arial,sans-serif;
   --body:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
@@ -183,9 +183,17 @@ tbody th{font-weight:600;color:var(--ink);white-space:nowrap}
 
 /* ------------------------------------------------------- code --- */
 .terminal{border:1px solid var(--edge);background:var(--hard);overflow:hidden}
-.terminal__bar{display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--panel);
+.terminal__bar{display:flex;align-items:center;gap:8px;padding:9px 13px;background:var(--panel);
   border-bottom:1px solid var(--edge)}
-.terminal__bar i{width:9px;height:9px;border-radius:50%;background:var(--edge);display:block}
+/* Traffic lights, in Aurora rather than Apple's own hues -- the page is Nord
+   throughout and three imported reds would be the only foreign colour on it.
+   The inset ring keeps them reading as physical caps, like the application's
+   controls, rather than as flat dots. */
+.terminal__bar i{width:11px;height:11px;border-radius:50%;display:block;
+  box-shadow:inset 0 0 0 1px rgba(23,27,34,.45),inset 0 1px 0 rgba(236,239,244,.28)}
+.terminal__bar i:nth-child(1){background:var(--red)}
+.terminal__bar i:nth-child(2){background:var(--warn)}
+.terminal__bar i:nth-child(3){background:var(--good)}
 .terminal__bar span{margin-left:6px;font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
   text-transform:uppercase;color:var(--ink-dim)}
 pre{margin:0;padding:18px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.8;color:var(--ink-body)}
@@ -452,9 +460,8 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
         that would keep working from one release to the next.
       </p>
       <p>
-        <strong>macOS.</strong> These builds are not notarized yet, so the first launch needs a
-        right click and <strong>Open</strong> instead of a double click. After that it opens
-        normally.
+        <strong>macOS.</strong> Signed and notarized by Apple, so it opens with a double click
+        like anything else. No right click, no warning, nothing to click past.
       </p>
       <p>
         <strong>Windows.</strong> Unsigned, so SmartScreen will warn:

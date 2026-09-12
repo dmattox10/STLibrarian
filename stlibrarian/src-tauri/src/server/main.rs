@@ -10,7 +10,7 @@
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, Request};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -25,9 +25,95 @@ use stlibrarian_lib::core::models::{
 };
 use stlibrarian_lib::core::organize::{OrganizeReport, PlannedMove};
 use stlibrarian_lib::core::{auth, db, organize, paths, relink, scanner, stl, thumbs};
-use tokio_util::io::ReaderStream;
+use rust_embed::{Embed, EmbeddedFile};
+use tower::ServiceExt;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
+
+// ------------------------------------------------------------- web assets ---
+
+/// The built React front end, compiled into this binary.
+///
+/// A release is then one file. The alternative -- shipping `dist/` beside the
+/// binary and finding it again through `STLIBRARIAN_WEB_ROOT` -- is two things
+/// to install, one of them a relative path, and it is the half people forget.
+///
+/// In a debug build rust-embed reads the same files from disk instead, so
+/// `yarn build` and a refresh is enough while working on the UI. Release
+/// builds carry the bytes.
+#[derive(Embed)]
+#[folder = "../dist/"]
+struct WebAssets;
+
+/// A strong ETag from the content hash rust-embed already computed.
+///
+/// Vite fingerprints the assets, but not `index.html` -- the one file every
+/// visit fetches. This is what turns that into a 304.
+fn etag_for(file: &EmbeddedFile) -> String {
+    let mut tag = String::with_capacity(34);
+    tag.push('"');
+    // Half the hash. A 128-bit tag is not going to collide, and the header is
+    // on every response.
+    for byte in file.metadata.sha256_hash().iter().take(16) {
+        tag.push_str(&format!("{:02x}", byte));
+    }
+    tag.push('"');
+    tag
+}
+
+/// Said once, at the only two moments it can be true: an empty `dist/` at
+/// build time, or a path that matched nothing and no index.html to fall back
+/// on. Both mean the same thing to whoever is reading it.
+fn no_web_ui() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "The web front end was not built into this binary.\n\n\
+         Run `yarn build` in the project root and rebuild the server, or set\n\
+         STLIBRARIAN_WEB_ROOT to a directory that already holds a built one.\n\n\
+         The API is unaffected and is still served under /api.\n",
+    )
+        .into_response()
+}
+
+async fn embedded_web(uri: Uri, headers: HeaderMap) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let requested = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
+
+    // Unknown paths fall back to index.html, with its own 200, so a deep link
+    // survives a refresh and the SPA router decides whether a route exists.
+    // Same behaviour as the ServeDir it replaced.
+    let (path, file) = match WebAssets::get(requested) {
+        Some(file) => (requested, file),
+        None => match WebAssets::get("index.html") {
+            Some(file) => ("index.html", file),
+            None => return no_web_ui(),
+        },
+    };
+
+    let etag = etag_for(&file);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == etag)
+    {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
+
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    (
+        [
+            (header::CONTENT_TYPE, mime.as_ref().to_string()),
+            (header::ETAG, etag),
+        ],
+        file.data.into_owned(),
+    )
+        .into_response()
+}
 
 // ---------------------------------------------------------------- errors ----
 
@@ -218,25 +304,108 @@ async fn get_model_route(Path(id): Path<i64>) -> Result<Json<ModelRecord>, ApiEr
 ///
 /// Addressed by id, so only indexed files are reachable -- a path in the URL
 /// would let any signed-in user read arbitrary files off the server.
-async fn model_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
+/// What a mesh file actually is, from its extension.
+///
+/// The library holds `.obj` and `.3mf` as well as `.stl`, and labelling all
+/// three `model/stl` is simply wrong. mime_guess does not know these, so the
+/// three the scanner accepts are named here and anything else falls back.
+fn model_mime(path: &std::path::Path) -> mime_guess::mime::Mime {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let literal = match ext.as_str() {
+        "stl" => "model/stl",
+        "obj" => "model/obj",
+        "3mf" => "model/3mf",
+        _ => return mime_guess::from_path(path).first_or_octet_stream(),
+    };
+    literal
+        .parse()
+        .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM)
+}
+
+/// Send a file from disk, with range requests, to a client that has already
+/// been authenticated and had its id looked up.
+///
+/// This is `tower_http`'s `ServeFile` rather than a hand-rolled stream, for
+/// two reasons that both cost real bytes when they go wrong:
+///
+///   * Ranges. A model runs to hundreds of megabytes and the client is often
+///     a workshop laptop on wifi. Without `Range`, every interruption starts
+///     the transfer again from zero. Getting ranges right means suffix ranges,
+///     unsatisfiable ranges, `If-Range` and `HEAD` -- all of which this
+///     already does, correctly, and none of which is interesting to write.
+///   * `Content-Length` comes from the file being opened, so it cannot
+///     disagree with the body. The previous code took it from the size the
+///     last scan recorded: re-export or repair a mesh without rescanning and a
+///     grown file arrived silently truncated under a 200 -- a corrupt STL
+///     handed straight to a slicer -- while a shrunk one hung the transfer on
+///     bytes that were never coming.
+async fn serve_file(
+    path: &std::path::Path,
+    mime: mime_guess::mime::Mime,
+    mut req: Request,
+) -> Result<Response, ApiError> {
+    // Asked before delegating so that a missing file is the API's own JSON
+    // error, like every other 404 here, rather than ServeFile's empty one.
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
+
+    enforce_if_range(&mut req, &meta);
+
+    let response = ServeFile::new_with_mime(path, &mime)
+        .oneshot(req)
+        .await
+        .map_err(|e| server_error(e.to_string()))?;
+
+    Ok(response.map(Body::new).into_response())
+}
+
+/// Honour `If-Range`, which `ServeFile` does not.
+///
+/// `ServeFile` applies a `Range` whether or not the validator the client sent
+/// still describes the file. That was harmless while nothing here advertised
+/// `Accept-Ranges` and no client tried to resume. Now that one does, it is a
+/// silent corruption: a download interrupted, the model re-exported, the
+/// download resumed, and the second half of a new file is appended to the
+/// first half of an old one under a 206 that says everything is fine. The
+/// file is then wrong in a way nothing checks until a printer does.
+///
+/// Dropping the `Range` makes `ServeFile` send the whole file, which is
+/// exactly what `If-Range` asks for when the validator no longer matches.
+///
+/// The comparison is a string match against the `Last-Modified` we would send
+/// for this file. Anything else -- an entity tag, a date written differently,
+/// a clock that moved -- fails to match and costs a full re-send. That is the
+/// right direction to be wrong in.
+fn enforce_if_range(req: &mut Request, meta: &std::fs::Metadata) {
+    let Some(sent) = req
+        .headers()
+        .get(header::IF_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+    else {
+        return;
+    };
+
+    let current = meta.modified().ok().map(httpdate::fmt_http_date);
+    if current.as_deref() != Some(sent.as_str()) {
+        req.headers_mut().remove(header::RANGE);
+    }
+}
+
+async fn model_file_route(Path(id): Path<i64>, req: Request) -> Result<Response, ApiError> {
     let record = with_db(move |conn| db::get_model(conn, id).map_err(|e| e.to_string()))
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "No such model".into()))?;
 
-    let file = tokio::fs::File::open(&record.path)
-        .await
-        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
-
-    // Streamed, not read into memory: these run to hundreds of megabytes.
-    let body = Body::from_stream(ReaderStream::new(file));
-    Ok((
-        [
-            (header::CONTENT_TYPE, "model/stl".to_string()),
-            (header::CONTENT_LENGTH, record.size.to_string()),
-        ],
-        body,
-    )
-        .into_response())
+    let path = std::path::PathBuf::from(&record.path);
+    let mime = model_mime(&path);
+    serve_file(&path, mime, req).await
 }
 
 #[derive(Deserialize)]
@@ -844,7 +1013,7 @@ async fn set_slice_owner_route(
 
 /// Download the sliced file itself -- which is how a desktop client connected
 /// to a remote server can hand it to a local slicer.
-async fn slice_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
+async fn slice_file_route(Path(id): Path<i64>, req: Request) -> Result<Response, ApiError> {
     let path = with_db(move |conn| {
         conn.query_row(
             "SELECT path FROM slices WHERE id = ?1",
@@ -855,25 +1024,34 @@ async fn slice_file_route(Path(id): Path<i64>) -> Result<Response, ApiError> {
     })
     .await?;
 
-    let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|e| ApiError(StatusCode::NOT_FOUND, format!("File unavailable: {}", e)))?;
-    let name = std::path::Path::new(&path)
+    let path = std::path::PathBuf::from(&path);
+    let name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "slice".into());
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", name),
-            ),
-        ],
-        Body::from_stream(ReaderStream::new(file)),
+    // Ranged and correctly measured, like a model. Gcode for a full plate is
+    // not small, and a slicer's output is the file you least want to fetch
+    // twice.
+    let mut response = serve_file(
+        &path,
+        mime_guess::mime::APPLICATION_OCTET_STREAM,
+        req,
     )
-        .into_response())
+    .await?;
+
+    // ServeFile does not name the download; without this the browser saves it
+    // as the numeric route segment.
+    if let Ok(value) = header::HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        name.replace('"', "")
+    )) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+
+    Ok(response)
 }
 
 // ---------------------------------------------------------------- prints ----
@@ -1151,17 +1329,28 @@ async fn main() {
             ApiError(StatusCode::NOT_FOUND, "Unknown API endpoint".into())
         });
 
-    // The built React app. Unknown paths fall back to index.html so client-side
-    // routing survives a refresh.
-    let web_root = PathBuf::from(env_or("STLIBRARIAN_WEB_ROOT", "../dist"));
-    // `fallback`, not `not_found_service`: the latter rewrites the response
-    // status to 404, so a deep link would serve the app under a "missing"
-    // status. `fallback` keeps index.html's own 200.
-    let spa = ServeDir::new(&web_root).fallback(ServeFile::new(web_root.join("index.html")));
+    // The built React app, from inside the binary unless told otherwise.
+    // STLIBRARIAN_WEB_ROOT still wins when it is set: it is how you point the
+    // server at a `vite build --watch` output, and how someone patches the UI
+    // on a NAS without a Rust toolchain.
+    let web_root = std::env::var("STLIBRARIAN_WEB_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
 
-    let app = Router::new()
-        .nest("/api", api)
-        .fallback_service(spa)
+    let app = Router::new().nest("/api", api);
+    let app = match &web_root {
+        Some(root) => {
+            // `fallback`, not `not_found_service`: the latter rewrites the
+            // response status to 404, so a deep link would serve the app under
+            // a "missing" status. `fallback` keeps index.html's own 200.
+            let spa = ServeDir::new(root).fallback(ServeFile::new(root.join("index.html")));
+            app.fallback_service(spa)
+        }
+        None => app.fallback(embedded_web),
+    };
+
+    let app = app
         // Same-origin in production; permissive so `vite dev` on :1420 can talk
         // to the API while you work on the front end.
         .layer(
@@ -1179,7 +1368,13 @@ async fn main() {
 
     log::info!("STLibrarian Pro listening on http://{}", addr);
     log::info!("Library at {}", paths::data_dir().display());
-    log::info!("Serving web front end from {}", web_root.display());
+    match &web_root {
+        Some(root) => log::info!("Serving web front end from {}", root.display()),
+        None => log::info!(
+            "Serving {} embedded web files (set STLIBRARIAN_WEB_ROOT to override)",
+            WebAssets::iter().count()
+        ),
+    }
 
     // with_connect_info so the open feedback endpoint can see who is calling
     // and rate limit them.

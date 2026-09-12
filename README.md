@@ -250,6 +250,96 @@ be exercised without putting anything in front of anybody.
 The server job deliberately installs no GUI packages. If it ever needs them,
 something has leaked from the desktop half into the shared core.
 
+## Signing
+
+Optional, and everything above works without it. But an unsigned build is not
+merely untidy: macOS refuses a downloaded one outright with *"STLibrarian is
+damaged and can't be opened"*, which reads to a stranger as "this software is
+broken", and Windows shows a SmartScreen warning. For a public download page,
+these are worth the money.
+
+The pipeline signs only when the secrets exist. Until then it keeps producing
+unsigned builds and prints a warning in the run log saying so, rather than
+failing. `tools/setup-releases.sh` reports exactly which half is configured.
+
+### macOS
+
+Export the certificate from Keychain Access, then hand it to the script:
+
+> Keychain Access -> **login** -> **My Certificates** -> right-click your
+> **Developer ID Application** certificate -> *Export...* -> Personal
+> Information Exchange (.p12)
+
+```bash
+tools/setup-signing-macos.sh ~/Desktop/DeveloperID.p12
+```
+
+It reads the identity and team ID from your keychain, checks the export, asks
+for your Apple ID and an app-specific password, and uploads all six secrets.
+
+**Export that one certificate, not the whole keychain.** The script takes a
+`.p12` rather than making one because `security export -t identities` takes
+*every* identity in the keychain: on a machine that also has an "Apple
+Development" certificate, the automated route uploads that private key to CI
+as well. Verified rather than assumed, by building a two-identity keychain and
+exporting it. The script rejects such a file.
+
+It also rejects a `.p12` that holds the wrong certificate, or that no longer
+opens with the password given. Each of those refusals was tested against a
+file built to trigger it.
+
+**"Apple Development" is not the certificate you need.** It signs builds for
+your own machines, and a download signed with it is still refused by
+Gatekeeper. Distribution outside the App Store needs **Developer ID
+Application**:
+
+> Xcode -> Settings -> Accounts -> your Apple ID -> Manage Certificates -> the
+> **+** at the bottom left -> **Developer ID Application**
+
+Notarization uses an **app-specific password** from
+<https://appleid.apple.com>, never your Apple ID password.
+
+| Secret | Where it comes from |
+| --- | --- |
+| `APPLE_CERTIFICATE` | base64 of the exported `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | the export password you invent |
+| `APPLE_SIGNING_IDENTITY` | read from the keychain |
+| `APPLE_ID` | your Apple account email |
+| `APPLE_PASSWORD` | the app-specific password |
+| `APPLE_TEAM_ID` | the ten characters in the identity's parentheses |
+
+A signature made with a secure timestamp stays valid after the certificate
+expires, so builds already shipped keep working. Only new builds need a live
+certificate.
+
+### Windows: deliberately unsigned
+
+Not worth the money. An **OV** certificate makes a build signed but does *not*
+silence SmartScreen, which needs an **EV** certificate plus reputation built
+over time. So the cheaper option buys nothing a user would notice, and the
+expensive one is a few hundred a year to remove one warning click.
+
+The download page says plainly that Windows will warn, which costs nothing and
+is true. Revisit when enough people are downloading for the friction to matter.
+
+### Linux
+
+Nothing to do. AppImage, `.deb` and `.rpm` are all installable unsigned.
+
+### Setting them
+
+`tools/setup-signing-macos.sh` sets them. To check what landed at any time:
+
+```bash
+tools/setup-releases.sh
+```
+
+### Until the macOS certificate exists
+
+Linux is unaffected. On macOS, right-click the app and choose *Open* the first
+time, or run `xattr -cr /Applications/STLibrarian.app`. Say this on the download
+page rather than letting people meet the error cold.
+
 ## How it is put together
 
 ```

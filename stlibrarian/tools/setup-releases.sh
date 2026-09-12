@@ -36,12 +36,24 @@ else
   exit 1
 fi
 
+# Fetched once, not once per key. Asking six times in a row got throttled and
+# the failures were invisible behind 2>/dev/null, so a key that was present
+# reported missing -- a different one each run, which is the tell. A lookup
+# that cannot answer must say so rather than answer "no".
+SECRET_LIST="$(gh secret list --repo "$SOURCE_REPO" 2>/dev/null || true)"
+if [ -z "$SECRET_LIST" ]; then
+  bad "could not read the secret list for $SOURCE_REPO"
+  echo "        Nothing below about signing can be trusted; try again in a moment."
+  exit 1
+fi
+have_secret() { printf '%s\n' "$SECRET_LIST" | grep -q "^$1[[:space:]]"; }
+
 # ---------------------------------------------------------------- the token --
 #
 # A fine-grained token scoped to the releases repository only. It cannot read
 # the private source, which is the entire point of using one rather than a
 # token that reaches everything you own.
-if gh secret list --repo "$SOURCE_REPO" 2>/dev/null | grep -q "^$SECRET_NAME"; then
+if have_secret "$SECRET_NAME"; then
   ok "$SECRET_NAME is set on $SOURCE_REPO"
 else
   bad "$SECRET_NAME is not set on $SOURCE_REPO"
@@ -66,6 +78,33 @@ else
 TEXT
   exit 1
 fi
+
+# ------------------------------------------------------------- signing -------
+#
+# Optional, and the pipeline works without it. But an unsigned build is refused
+# by Gatekeeper on download ("STLibrarian is damaged and can't be opened") and
+# warned about by SmartScreen, so a public download page wants these.
+say "Signing"
+
+
+
+MAC_NEEDED="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+MAC_MISSING=""
+for k in $MAC_NEEDED; do have_secret "$k" || MAC_MISSING="$MAC_MISSING $k"; done
+if [ -z "$MAC_MISSING" ]; then
+  ok "macOS builds will be signed and notarized"
+else
+  bad "macOS builds will be UNSIGNED. Gatekeeper refuses these on download."
+  echo "        missing:$MAC_MISSING"
+  echo "        Run tools/setup-signing-macos.sh -- it does the whole thing."
+fi
+
+# Windows is deliberately not signed. An OV certificate would not silence
+# SmartScreen -- that needs EV plus reputation built over time -- so it is a
+# few hundred a year that changes nothing the user sees. The download page
+# says so plainly instead.
+ok "Windows builds are unsigned by choice; the site says so"
+ok "Linux builds need no signing"
 
 # --------------------------------------------------------- prove it works ----
 #

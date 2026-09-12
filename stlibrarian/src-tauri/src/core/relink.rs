@@ -228,7 +228,11 @@ mod tests {
 
         let found = plan(&b.conn, &b.dir.join("elsewhere")).unwrap();
         assert_eq!(found.len(), 1);
-        assert!(found[0].found.ends_with("elsewhere/knight.stl"));
+        // Compared as a path, not as text: on Windows the separator is a
+        // backslash and a string comparison against "elsewhere/knight.stl"
+        // never matches. Path::ends_with matches whole components, and
+        // takes "/" in the pattern on either platform.
+        assert!(std::path::Path::new(&found[0].found).ends_with("elsewhere/knight.stl"));
 
         let report = apply(&b.conn, &b.dir.join("elsewhere")).unwrap();
         assert_eq!(report.relinked, 1);

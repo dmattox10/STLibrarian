@@ -36,7 +36,8 @@ required-features = ["server"]
 [features]
 default = ["desktop"]
 desktop = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-dialog", "dep:ureq"]
-server = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:tokio-util"]
+server = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:tokio-util",
+          "dep:rust-embed", "dep:mime_guess", "dep:tower", "dep:httpdate"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -87,6 +88,20 @@ ureq = { version = "2", optional = true }
 
 # --- server only ---
 axum = { version = "0.8", optional = true }
+# The built web UI is compiled into the server binary. Without this a release
+# is a binary *and* a dist/ directory that has to travel with it and be found
+# again at runtime -- two things to install, one of them a relative path.
+rust-embed = { version = "8", optional = true }
+# Embedded files carry no filesystem to ask about their type, and a .js served
+# as octet-stream is a blank page in every browser.
+mime_guess = { version = "2", optional = true }
+# `oneshot`, to run tower-http's ServeFile from inside a handler that has
+# already done its own auth and database work.
+tower = { version = "0.5", features = ["util"], optional = true }
+# To format a file's mtime the way an HTTP date is written, so an `If-Range`
+# can be compared against it. Already in the tree under tower-http; named here
+# because relying on a transitive dependency is how a build breaks later.
+httpdate = { version = "1", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs"], optional = true }
 tower-http = { version = "0.6", features = ["cors", "fs"], optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }

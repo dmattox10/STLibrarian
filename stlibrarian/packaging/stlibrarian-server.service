@@ -1,0 +1,66 @@
+# STLibrarian Pro as a system service.
+#
+#   sudo cp packaging/stlibrarian-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stlibrarian-server
+#
+# The admin password is printed once, on the very first start:
+#   sudo journalctl -u stlibrarian-server | grep -A3 'first run'
+
+[Unit]
+Description=STLibrarian Pro
+Documentation=https://github.com/dmattox10/STLibrarian
+After=network-online.target
+Wants=network-online.target
+# A library on a network share is not there yet when the network is: without
+# this the first scan after a reboot finds an empty mount and reports every
+# model missing.
+RequiresMountsFor=/srv/3dprints
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/stlibrarian-server
+Restart=on-failure
+RestartSec=5s
+
+# Run as a service account that can read the models, not as root.
+#   sudo useradd --system --home /var/lib/stlibrarian --shell /usr/sbin/nologin stlibrarian
+User=stlibrarian
+Group=stlibrarian
+
+Environment=STLIBRARIAN_DATA_DIR=/var/lib/stlibrarian
+Environment=STLIBRARIAN_BIND=0.0.0.0:3000
+Environment=RUST_LOG=info
+
+# The library directory, created and owned by the service on first start.
+StateDirectory=stlibrarian
+StateDirectoryMode=0750
+
+# --- containment ---------------------------------------------------------
+# It reads model files and writes one SQLite database. Nothing here is
+# defensive theatre; each line closes something the process genuinely never
+# does. ReadWritePaths is the one to edit: add every share holding models,
+# because Organise moves files inside them.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/stlibrarian /srv/3dprints
+
+# Scanning a large share opens a lot of files at once.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -92,6 +92,9 @@ PY
 echo "==> starting server on :$PORT"
 export STLIBRARIAN_DATA_DIR="$WORK/data"
 export STLIBRARIAN_BIND="127.0.0.1:$PORT"
+# Deliberately the override rather than the embedded copy: the server
+# compiles the web UI in, and tools/remote-client.sh exercises that, so
+# setting it here keeps the escape hatch under test too.
 export STLIBRARIAN_WEB_ROOT="$HERE/dist"
 # Every check here arrives from 127.0.0.1, so the whole suite shares one
 # address's hourly allowance. Raised so the feedback checks all fit under it;
