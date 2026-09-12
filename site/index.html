@@ -443,6 +443,31 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
       <a class="btn" href="https://github.com/dmattox10/stlibrarian-releases/releases/latest">Linux</a>
     </div>
     <p class="freenote">Free, and free to keep. No account, no telemetry.</p>
+
+    <div class="prose">
+      <h3 style="font-size:1.2rem;margin-top:8px">What happens on first run</h3>
+      <p>
+        All three buttons open the same releases page, where you pick the file for your machine.
+        Filenames carry the version number, so there is no fixed link to a particular installer
+        that would keep working from one release to the next.
+      </p>
+      <p>
+        <strong>macOS.</strong> These builds are not notarized yet, so the first launch needs a
+        right click and <strong>Open</strong> instead of a double click. After that it opens
+        normally.
+      </p>
+      <p>
+        <strong>Windows.</strong> Unsigned, so SmartScreen will warn:
+        <strong>More info</strong>, then <strong>Run anyway</strong>. An OV certificate would not
+        silence that warning, and the EV kind earns its reputation over time rather than buying
+        it, so there is nothing to buy that would help yet.
+      </p>
+      <p>
+        <strong>Linux.</strong> The AppImage has to be made executable before it will start:
+        <span class="num">chmod +x</span> it and run it. The <span class="num">.deb</span> and
+        <span class="num">.rpm</span> need no such thing.
+      </p>
+    </div>
   </section>
 
   <section id="docs" class="stack">
