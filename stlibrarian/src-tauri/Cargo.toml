@@ -1,6 +1,6 @@
 [package]
 name = "stlibrarian"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first 3D model library that scales to a multi-user NAS"
 authors = ["Dan Mattox"]
 edition = "2021"
