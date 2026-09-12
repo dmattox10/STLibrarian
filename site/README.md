@@ -1,7 +1,42 @@
 # stlibrarian.com
 
-One static page. No build step, no dependencies to install -- upload
-`index.html` and it is the site.
+One static page and three screenshots. No build step, no dependencies to
+install -- upload `index.html` and `shots/` and it is the site.
+
+## Screenshots
+
+`shots/` holds the three JPEGs in the "What it looks like" section. They are
+photographs of the real application: the headless server running against a
+throwaway library, driven in a real browser. Nothing is a mockup and no DOM is
+edited to make a shot look better.
+
+Regenerate them with:
+
+```bash
+site/tools/screenshots.sh
+```
+
+That builds the front end and the server, generates a sample library of real
+watertight meshes, scans and seeds it through the HTTP API, photographs three
+views at 2x, and downsamples them into `shots/`. Review what lands there before
+committing -- it is a screenshot, and only a person can tell whether it reads.
+
+Three things about it are deliberate and worth not undoing:
+
+- **The library lives at `/volume1/3dprints`.** The path is on screen in the
+  details panel. Pointing the rig at a build directory puts that build
+  directory on the marketing site.
+- **No reviews are seeded.** The page renders `/api/reviews`, and the point of
+  that feature is that a review comes from somebody who runs the software and
+  is approved by a person first. Inventing testimonials to photograph would
+  defeat the one thing it exists to prevent.
+- **Provenance is left as the scanner inferred it.** Creator comes from the
+  folder name. Overwriting it with invented designer names would make generated
+  sample geometry look like somebody else's work.
+
+The shots are of the server in a browser, which is why a sign-out button is
+visible. The page says so, because the desktop app is the same front end built
+from the same source and the difference is worth being straight about.
 
 ## Reviews
 

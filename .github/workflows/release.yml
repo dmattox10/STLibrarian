@@ -71,8 +71,11 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
+          # Only the ayatana indicator package. It declares
+          # `Conflicts: libappindicator3-dev`, so asking for both leaves apt
+          # with held broken packages and the job never reaches the compiler.
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
             build-essential curl wget file libssl-dev libgtk-3-dev \
             libayatana-appindicator3-dev
 
@@ -94,6 +97,15 @@ jobs:
       - name: Install frontend dependencies
         working-directory: stlibrarian
         run: yarn install --frozen-lockfile
+
+      # Before the tests, not just before the bundle. `cargo test` compiles the
+      # desktop binary, and tauri-codegen embeds frontendDist (../dist) at
+      # compile time; dist/ is gitignored, so on a fresh checkout it is absent
+      # and the step exits 101 without running a test. tauri-action would build
+      # it, but that is two steps too late.
+      - name: Build the web client
+        working-directory: stlibrarian
+        run: yarn build
 
       # The suites that do not need a display run on every platform, because a
       # release that fails its own tests should never reach a download button.
