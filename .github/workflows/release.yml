@@ -136,9 +136,13 @@ jobs:
         with:
           projectPath: stlibrarian
           args: --target ${{ matrix.target }}
-          # No release is created here. The bundles are collected and published
-          # to the public repository by the job below.
-          includeRelease: false
+          # These two pick which cargo profile to build, not whether a GitHub
+          # release is cut. Setting both to false built neither: the step
+          # finished in 0.4s, reported "No artifacts were found", and the
+          # collect step below then failed on a bundle directory that was
+          # never created. What keeps a release from being cut is passing no
+          # tagName -- the job below publishes, to the other repository.
+          includeRelease: true
           includeDebug: false
 
       - name: Collect bundles
