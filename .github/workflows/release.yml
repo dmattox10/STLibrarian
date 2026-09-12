@@ -1,96 +1,80 @@
-# Everything a release consists of, built by machine.
+# Builds every desktop bundle and the headless server binary, then publishes
+# them to a SEPARATE PUBLIC repository.
 #
-# Triggered by a tag:  git tag v0.2.0 && git push origin v0.2.0
+# Why the second repository: this one is private, and release assets on a
+# private repo need a token to download -- a download button on a website
+# cannot supply one. So the source stays here and only the built artifacts
+# cross over, where anybody can fetch them without an account.
 #
-# The point of this file is that the server stops being a thing people compile.
-# A NAS owner should download a binary or pull an image, exactly as a desktop
-# user downloads a bundle -- and that only happens if something builds those
-# artefacts on every release without being asked.
-name: release
+# What has to exist before this works:
+#   1. A public repo, by default dmattox10/stlibrarian-releases, with no
+#      source in it. It only ever holds releases.
+#   2. A secret RELEASES_TOKEN on THIS repo: a fine-grained personal access
+#      token scoped to that one repository, with Contents: read and write.
+#      Nothing else. It cannot read this repository's source.
+#   3. For the container image only: ghcr.io/<owner>/stlibrarian set to public
+#      once, under Packages -> Package settings. Same reason as the releases
+#      repo -- a NAS running `docker compose pull` has no login to give.
+#
+# To cut a release: bump the version in three places (package.json,
+# src-tauri/Cargo.toml, src-tauri/tauri.conf.json), commit, then
+#   git tag v0.2.0 && git push origin v0.2.0
+name: Release
 
 on:
   push:
     tags: ["v*"]
+  # Buildable on demand without tagging, to check the pipeline still works.
   workflow_dispatch:
-
-permissions:
-  contents: write     # create the GitHub Release and attach files
-  packages: write     # push the container image to ghcr.io
+    inputs:
+      dry_run:
+        description: "Build only; publish nothing"
+        type: boolean
+        default: true
 
 env:
-  CARGO_TERM_COLOR: always
+  RELEASES_REPO: dmattox10/stlibrarian-releases
 
 jobs:
-  # ------------------------------------------------------------------ desktop
   desktop:
-    name: desktop (${{ matrix.label }})
+    name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # Declared at job level, not on the step, because a step's `if` reads the
+    # env context from above it and cannot see the secrets context at all.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
+      # One platform failing should not hide whether the others build.
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest,  label: macos-arm64,   args: "--target aarch64-apple-darwin" }
-          - { os: macos-latest,  label: macos-x86_64,  args: "--target x86_64-apple-darwin" }
-          - { os: ubuntu-22.04,  label: linux-x86_64,  args: "" }
-          - { os: windows-latest, label: windows-x86_64, args: "" }
-    defaults:
-      run:
-        working-directory: stlibrarian
+          - os: macos-14
+            label: macOS (Apple silicon)
+            target: aarch64-apple-darwin
+          - os: macos-13
+            label: macOS (Intel)
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            label: Linux
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            label: Windows
+            target: x86_64-pc-windows-msvc
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: yarn
-          cache-dependency-path: stlibrarian/yarn.lock
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.label == 'macos-arm64' && 'aarch64-apple-darwin' || matrix.label == 'macos-x86_64' && 'x86_64-apple-darwin' || '' }}
-
-      # Tauri on Linux links GTK and webkit2gtk. Ubuntu 22.04 rather than
-      # latest: the bundle is only installable on distributions whose glibc is
-      # at least as new as the one it was built against.
+      # Tauri 2 on Linux wants webkit2gtk 4.1. 22.04 is the oldest runner that
+      # has it, and building on the oldest available glibc is what keeps the
+      # AppImage runnable on anything newer.
       - name: Linux build dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf build-essential curl wget file libssl-dev
-
-      - run: yarn install --frozen-lockfile
-
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Set these two once you have run `yarn tauri signer generate`, and
-          # the built bundles gain .sig files the updater can verify.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: stlibrarian
-          tagName: ${{ github.ref_name }}
-          releaseName: STLibrarian ${{ github.ref_name }}
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-
-  # ------------------------------------------------------------ server binary
-  server:
-    name: server (${{ matrix.target }})
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { target: x86_64-unknown-linux-gnu,  suffix: linux-x86_64 }
-          - { target: aarch64-unknown-linux-gnu, suffix: linux-aarch64 }
-    defaults:
-      run:
-        working-directory: stlibrarian
-    steps:
-      - uses: actions/checkout@v4
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            build-essential curl wget file libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev
 
       - uses: actions/setup-node@v4
         with:
@@ -102,51 +86,233 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # rusqlite is compiled from source (`bundled`), so cross-compiling needs
-      # a cross C compiler -- not just a Rust target.
-      - name: Cross compiler for aarch64
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: stlibrarian/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: stlibrarian
+        run: yarn install --frozen-lockfile
+
+      # The suites that do not need a display run on every platform, because a
+      # release that fails its own tests should never reach a download button.
+      - name: Unit tests
+        working-directory: stlibrarian/src-tauri
+        run: cargo test --features server
+
+      - name: Frontend tests
+        working-directory: stlibrarian
+        run: yarn test
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing and notarization. Every one of these is empty until
+          # the corresponding secret exists, and tauri-action signs only when
+          # they are set, so an unsigned build is the graceful default rather
+          # than a failure.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Only used to unlock the throwaway keychain the action makes on the
+          # runner. It protects nothing that outlives the job.
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'ci-ephemeral-keychain' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: stlibrarian
+          args: --target ${{ matrix.target }}
+          # No release is created here. The bundles are collected and published
+          # to the public repository by the job below.
+          includeRelease: false
+          includeDebug: false
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p out
+          BUNDLE="stlibrarian/src-tauri/target/${{ matrix.target }}/release/bundle"
+          # -print0/-d '' so a path with a space in it survives the loop.
+          find "$BUNDLE" -type f \
+            \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
+               -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' \) \
+            -print0 2>/dev/null | while IFS= read -r -d '' f; do
+              cp "$f" out/
+            done
+          ls -la out
+
+      # Whether a build is signed is the kind of thing that is discovered by a
+      # user, months later, unless it is stated here.
+      - name: Report signing status
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            macos-*)
+              if [ -n "$APPLE_CERTIFICATE" ]; then
+                for app in $(find "stlibrarian/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' 2>/dev/null); do
+                  codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tail -3 || true
+                  spctl --assess --type execute "$app" 2>&1 | tail -2 || true
+                done
+              else
+                echo "::warning::Unsigned macOS build. Gatekeeper will refuse it on download until APPLE_CERTIFICATE and the notarization secrets are set."
+              fi
+              ;;
+            windows-latest)
+              # Unsigned on purpose. An OV certificate would not silence
+              # SmartScreen anyway -- that needs EV plus accumulated
+              # reputation -- so it is a few hundred a year for nothing.
+              echo "Windows builds are unsigned by choice; the download page says so."
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  # The NAS build. No GTK, no webkit, no display -- that is the whole point of
+  # the feature split, and building it here proves the split still holds.
+  server:
+    name: Server (${{ matrix.arch }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: stlibrarian/src-tauri -> target
+          key: server-${{ matrix.target }}
+
+      # Deliberately no GUI packages installed. If this job ever needs them,
+      # something has leaked from the desktop half into the shared core.
+      - name: Cross compiler for arm64
+        if: matrix.arch == 'arm64'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-          {
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
-          } >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
-      - name: Build the web front end
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: stlibrarian/yarn.lock
+
+      # Built before the server, not beside it: the web client is compiled
+      # into the binary, so `yarn build` has to have run first or the release
+      # ships a server that serves nothing.
+      - name: Build the web client
+        working-directory: stlibrarian
         run: |
           yarn install --frozen-lockfile
           yarn build
 
       - name: Build the server
+        working-directory: stlibrarian/src-tauri
         run: |
-          cargo build --release --locked --manifest-path src-tauri/Cargo.toml \
+          cargo build --release --locked \
             --target ${{ matrix.target }} \
-            --no-default-features --features server --bin stlibrarian-server
+            --no-default-features --features server \
+            --bin stlibrarian-server
 
-      - name: Collect
+      # One executable. The browser UI is inside it, so there is no web
+      # directory to unpack beside it and nothing to point at it.
+      - name: Package
+        working-directory: stlibrarian
         run: |
-          mkdir -p out
-          # One artefact per architecture. The web UI is compiled into it, so
-          # there is nothing to publish beside it.
-          cp src-tauri/target/${{ matrix.target }}/release/stlibrarian-server \
-             out/stlibrarian-server-${{ matrix.suffix }}
-          ( cd out && sha256sum -- * > SHA256SUMS-${{ matrix.suffix }} )
+          STAGE="stlibrarian-server-${{ matrix.arch }}"
+          mkdir -p "out/$STAGE"
+          cp "src-tauri/target/${{ matrix.target }}/release/stlibrarian-server" "out/$STAGE/"
+          cd out && tar czf "$STAGE.tar.gz" "$STAGE"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: stlibrarian/out/*
-          draft: true
-          tag_name: ${{ github.ref_name }}
+          name: server-${{ matrix.arch }}
+          path: stlibrarian/out/*.tar.gz
+          if-no-files-found: error
 
-  # ------------------------------------------------------------------- image
+  publish:
+    name: Publish to the public releases repo
+    needs: [desktop, server]
+    runs-on: ubuntu-latest
+    # Only a tag publishes. A manual run builds and stops, so the pipeline can
+    # be exercised without putting anything in front of anybody.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+
+      - name: Flatten
+        run: |
+          mkdir -p assets
+          find incoming -type f -print0 | while IFS= read -r -d '' f; do
+            cp "$f" assets/
+          done
+          ls -la assets
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "RELEASES_TOKEN is not set -- see the comment at the top of this file." >&2
+            exit 1
+          fi
+          # The public repo has no source and therefore no matching commit, so
+          # the release is cut against its default branch and carries only the
+          # tag name.
+          cat > notes.md <<'NOTES'
+          Desktop builds for macOS, Windows and Linux, and the headless server for a NAS.
+
+          Source lives in a private repository; these are the builds it produces.
+          NOTES
+          # The heredoc above is indented to stay inside this block, so strip it.
+          sed -i 's/^          //' notes.md
+
+          # The public repo has no source and therefore no matching commit, so
+          # the release is cut against its default branch and carries only the
+          # tag name. A re-run of the same tag updates the assets in place.
+          gh release create "$TAG" \
+            --repo "$RELEASES_REPO" \
+            --title "STLibrarian $TAG" \
+            --notes-file notes.md \
+            assets/* \
+          || gh release upload "$TAG" --repo "$RELEASES_REPO" --clobber assets/*
+
   image:
-    name: container image
+    name: Container image
     runs-on: ubuntu-22.04
+    # Not in `needs`: a NAS pulling an image and a person downloading an
+    # installer are separate deliveries, and neither should be held up by the
+    # other failing.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
+      # arm64 matters here in a way it does not for a desktop bundle: a good
+      # share of NAS boxes are arm, and an amd64-only image fails for them at
+      # `docker compose up` with an exec format error.
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -165,13 +331,13 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      # arm64 matters: a good share of NAS boxes are arm, and an amd64-only
-      # image fails for them at `docker compose up` with an exec format error.
+      # A manual run builds the image and stops, matching the publish job: the
+      # pipeline can be exercised without putting anything in front of anyone.
       - uses: docker/build-push-action@v6
         with:
           context: stlibrarian
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

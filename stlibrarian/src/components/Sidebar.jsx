@@ -8,6 +8,8 @@ import UsersPanel from "./UsersPanel.jsx";
 import ServerPanel from "./ServerPanel.jsx";
 import MissingPanel from "./MissingPanel.jsx";
 import BackupPanel from "./BackupPanel.jsx";
+import ModerationPanel from "./ModerationPanel.jsx";
+import FeedbackPanel from "./FeedbackPanel.jsx";
 import { formatBytes, formatCount } from "../lib/format.js";
 
 function ScanPanel({ api, onComplete }) {
@@ -120,6 +122,7 @@ export default function Sidebar({
   onRefresh,
   canScan,
   me,
+  onFeedback,
 }) {
   return (
     <>
@@ -197,6 +200,10 @@ export default function Sidebar({
       {canScan && api.users ? <UsersPanel api={api} me={me} onChanged={onRefresh} /> : null}
 
       {canScan ? <BackupPanel api={api} /> : null}
+
+      {canScan && api.feedbackQueue ? <ModerationPanel api={api} /> : null}
+
+      <FeedbackPanel onOpen={onFeedback} />
 
       <Panel title="Library">
         <dl className="gc-kv">

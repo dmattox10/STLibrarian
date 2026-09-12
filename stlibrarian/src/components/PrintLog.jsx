@@ -151,7 +151,7 @@ export default function PrintLog({ api, model, onChanged }) {
               <input
                 value={settings}
                 onChange={(e) => setSettings(e.target.value)}
-                placeholder="Settings — layer height, exposure, supports"
+                placeholder="Settings: layer height, exposure, supports"
                 aria-label="Settings"
               />
             </Field>

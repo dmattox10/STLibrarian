@@ -198,7 +198,12 @@ export function createHttpAdapter(baseUrl = "") {
     deletePrint: (printId) => request(`/api/prints/${printId}`, { method: "DELETE" }),
     bulkRemoveTag: (modelIds, tag) =>
       request("/api/bulk/tags/remove", { method: "POST", body: { model_ids: modelIds, tag } }),
+    appInfo: async () => ["", "web"],
     libraryLocation: () => request("/api/library/location"),
+    feedbackQueue: (status = "pending") => request(`/api/feedback?status=${status}`),
+    moderateFeedback: (id, status) =>
+      request(`/api/feedback/${id}/moderate`, { method: "POST", body: { status } }),
+    deleteFeedback: (id) => request(`/api/feedback/${id}`, { method: "DELETE" }),
     missingModels: () => request("/api/library/missing"),
     relinkPlan: (root) => request("/api/library/relink/plan", { method: "POST", body: { root } }),
     relinkApply: (root) => request("/api/library/relink/apply", { method: "POST", body: { root } }),

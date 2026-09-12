@@ -137,3 +137,9 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# A library database is somebody's data, not source. One was committed once
+# and came back through a merge; this is so it cannot happen a third time.
+stl.db
+stl.db-wal
+stl.db-shm

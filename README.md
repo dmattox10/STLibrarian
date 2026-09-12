@@ -162,14 +162,183 @@ the old one, so its triangle count and volume describe what is actually there.
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --lib                         # everything: 143 tests
-cd src-tauri && cargo test --no-default-features --lib   # core only, no Tauri
-tools/e2e.sh                                             # server + API: 179 checks
+cd src-tauri && cargo test --features server --lib        # everything: 155 tests
+cd src-tauri && cargo test --no-default-features --lib    # core only, no Tauri
+yarn test                                                 # the client's own gates
+tools/e2e.sh                                              # server + API: 204 checks
 ```
 
 `tools/e2e.sh` builds everything, starts a server on a scratch port against a
 scratch data directory, and exercises the API the way a client does. It touches
 nothing you own.
+
+## Reviews and problem reports
+
+The app asks for a review once, and only after the library has earned the
+question: twenty-five models with three prints logged against them. A fresh
+install is never asked, and a big import with nothing printed is a folder, not
+a habit. "No thanks" ends it permanently. **Feedback** in the sidebar is always
+there for anyone who wants to say something unprompted.
+
+Submissions arrive at an open endpoint -- a copy of the app on a bench
+somewhere, with no account anywhere -- so they are treated as hostile. Control
+characters are stripped, paragraphs kept, lengths capped, and an address may
+send six an hour (`STLIBRARIAN_FEEDBACK_PER_HOUR` raises that, which you want
+behind a reverse proxy, where every submission arrives from one address).
+
+Nothing submitted is public. A review reaches `GET /api/reviews` only if **it
+is a review**, **an administrator approved it**, and **its author ticked the
+publish box**. Approving one the author withheld files it as read. A problem
+report is never a testimonial however warmly it is worded, and the public shape
+carries no contact details and no status at all. The moderation queue is under
+**Feedback** in a Pro sidebar, administrators only.
+
+The website reads `/api/reviews` at load and stays hidden when it is empty.
+There is no submission form on the site on purpose -- the app does the asking,
+so a review comes from somebody who actually runs it.
+
+## Releasing
+
+This repository is private, and release assets on a private repo need a token
+to download, which a download button on a website cannot supply. So the source
+stays here and only the built artifacts cross over to a **separate public
+repository** that holds releases and nothing else.
+
+`tools/setup-releases.sh` checks every piece and tells you what is missing.
+Run it any time; it changes nothing unless you ask it to.
+
+The public repository, `dmattox10/stlibrarian-releases`, already exists and
+holds builds only. What remains is a token, because GitHub has no API that
+mints one: make a **fine-grained** token at
+<https://github.com/settings/personal-access-tokens/new>, scoped to *that
+repository only* with **Contents: read and write**, then
+
+```bash
+gh secret set RELEASES_TOKEN --repo dmattox10/STLibrarian
+```
+
+and paste it. Scoped that way it cannot read this repository, which is the
+point of using one rather than a token that reaches everything you own.
+
+To check the token really works before trusting it to a midnight release:
+
+```bash
+RELEASES_TOKEN=github_pat_... tools/setup-releases.sh
+```
+
+That cuts a throwaway draft release in the public repo and deletes it again. A
+draft is visible to nobody and notifies nobody.
+
+Then a release is a tag:
+
+```bash
+# bump the version in package.json, src-tauri/Cargo.toml and tauri.conf.json
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+One caveat while this work is on a branch: `workflow_dispatch` only registers
+a workflow that exists on the default branch, so the manual run is unavailable
+until it lands on `main`. Tag-triggered runs use the workflow as it exists at
+the tagged commit, so tagging a branch works today.
+
+`.github/workflows/release.yml` runs the test suites on every platform, builds
+the desktop bundles for macOS (both architectures), Windows and Linux, builds
+the headless server for x86_64 and arm64, and publishes the lot. A manual run
+(**Run workflow**) builds everything and publishes nothing, so the pipeline can
+be exercised without putting anything in front of anybody.
+
+The server job deliberately installs no GUI packages. If it ever needs them,
+something has leaked from the desktop half into the shared core.
+
+## Signing
+
+Optional, and everything above works without it. But an unsigned build is not
+merely untidy: macOS refuses a downloaded one outright with *"STLibrarian is
+damaged and can't be opened"*, which reads to a stranger as "this software is
+broken", and Windows shows a SmartScreen warning. For a public download page,
+these are worth the money.
+
+The pipeline signs only when the secrets exist. Until then it keeps producing
+unsigned builds and prints a warning in the run log saying so, rather than
+failing. `tools/setup-releases.sh` reports exactly which half is configured.
+
+### macOS
+
+Export the certificate from Keychain Access, then hand it to the script:
+
+> Keychain Access -> **login** -> **My Certificates** -> right-click your
+> **Developer ID Application** certificate -> *Export...* -> Personal
+> Information Exchange (.p12)
+
+```bash
+tools/setup-signing-macos.sh ~/Desktop/DeveloperID.p12
+```
+
+It reads the identity and team ID from your keychain, checks the export, asks
+for your Apple ID and an app-specific password, and uploads all six secrets.
+
+**Export that one certificate, not the whole keychain.** The script takes a
+`.p12` rather than making one because `security export -t identities` takes
+*every* identity in the keychain: on a machine that also has an "Apple
+Development" certificate, the automated route uploads that private key to CI
+as well. Verified rather than assumed, by building a two-identity keychain and
+exporting it. The script rejects such a file.
+
+It also rejects a `.p12` that holds the wrong certificate, or that no longer
+opens with the password given. Each of those refusals was tested against a
+file built to trigger it.
+
+**"Apple Development" is not the certificate you need.** It signs builds for
+your own machines, and a download signed with it is still refused by
+Gatekeeper. Distribution outside the App Store needs **Developer ID
+Application**:
+
+> Xcode -> Settings -> Accounts -> your Apple ID -> Manage Certificates -> the
+> **+** at the bottom left -> **Developer ID Application**
+
+Notarization uses an **app-specific password** from
+<https://appleid.apple.com>, never your Apple ID password.
+
+| Secret | Where it comes from |
+| --- | --- |
+| `APPLE_CERTIFICATE` | base64 of the exported `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | the export password you invent |
+| `APPLE_SIGNING_IDENTITY` | read from the keychain |
+| `APPLE_ID` | your Apple account email |
+| `APPLE_PASSWORD` | the app-specific password |
+| `APPLE_TEAM_ID` | the ten characters in the identity's parentheses |
+
+A signature made with a secure timestamp stays valid after the certificate
+expires, so builds already shipped keep working. Only new builds need a live
+certificate.
+
+### Windows: deliberately unsigned
+
+Not worth the money. An **OV** certificate makes a build signed but does *not*
+silence SmartScreen, which needs an **EV** certificate plus reputation built
+over time. So the cheaper option buys nothing a user would notice, and the
+expensive one is a few hundred a year to remove one warning click.
+
+The download page says plainly that Windows will warn, which costs nothing and
+is true. Revisit when enough people are downloading for the friction to matter.
+
+### Linux
+
+Nothing to do. AppImage, `.deb` and `.rpm` are all installable unsigned.
+
+### Setting them
+
+`tools/setup-signing-macos.sh` sets them. To check what landed at any time:
+
+```bash
+tools/setup-releases.sh
+```
+
+### Until the macOS certificate exists
+
+Linux is unaffected. On macOS, right-click the app and choose *Open* the first
+time, or run `xattr -cr /Applications/STLibrarian.app`. Say this on the download
+page rather than letting people meet the error cold.
 
 ## How it is put together
 

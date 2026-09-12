@@ -1,0 +1,699 @@
+<title>STLibrarian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+/* ============================================================
+   stlibrarian.com
+   Same palette and component language as the application: Nord
+   Polar Night for ground and panels, Frost as the one
+   interaction colour, Aurora only for state. Committed dark,
+   because the product is and the page should look like it.
+   ============================================================ */
+:root {
+  --void:#1f242e; --ground:#262c38; --panel:#2e3440; --panel-lift:#3b4252;
+  --edge:#434c5e; --edge-soft:#39404f; --hard:#171b22;
+  --ink:#e5e9f0; --ink-body:#c6cedb; --ink-dim:#8a93a5; --gold:#ebcb8b;
+  --frost:#88c0d0; --frost-deep:#5e81ac; --frost-pale:#8fbcbb;
+  --good:#a3be8c; --warn:#ebcb8b; --violet:#b48ead; --red:#bf616a;
+  --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --body:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --measure:62ch; --wide:1200px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:radial-gradient(130% 70% at 50% -8%,#343d4d 0%,var(--void) 58%),var(--void);
+  color:var(--ink-body);font-family:var(--body);font-size:16px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--wide);margin:0 auto;padding-inline:20px}
+
+h1,h2,h3{font-family:var(--display);color:var(--ink);text-wrap:balance;margin:0}
+h1{font-size:clamp(2.5rem,6.4vw,4.4rem);font-weight:800;letter-spacing:-.035em;line-height:1}
+h2{font-size:clamp(1.5rem,3.2vw,2.15rem);font-weight:700;letter-spacing:-.02em;line-height:1.12}
+h3{font-size:1.02rem;font-weight:700}
+p{margin:0}
+strong{color:var(--ink);font-weight:600}
+.prose{max-width:var(--measure);display:flex;flex-direction:column;gap:14px}
+.lede{font-size:clamp(1.06rem,1.9vw,1.24rem);line-height:1.6}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.eyebrow{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:.68rem;
+  font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--frost)}
+.eyebrow::before{content:"";width:3px;height:13px;flex:none;background:var(--frost);
+  box-shadow:0 0 9px rgba(136,192,208,.55)}
+
+/* ------------------------------------------------------- nav --- */
+nav{border-bottom:1px solid var(--edge-soft);position:sticky;top:0;z-index:20;
+  background:rgba(31,36,46,.86);backdrop-filter:blur(10px)}
+.nav__in{max-width:var(--wide);margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:800;
+  letter-spacing:.1em;text-transform:uppercase;font-size:.88rem;color:var(--ink);text-decoration:none}
+.brand em{font-style:normal;color:var(--frost)}
+.brand__mark{width:26px;height:26px;flex:none;display:grid;place-items:center;color:var(--void);
+  background:linear-gradient(160deg,var(--frost),var(--frost-deep));
+  clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)}
+.nav__spacer{flex:1}
+.nav__links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px 20px;font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase}
+.nav__links a{color:var(--ink-dim);text-decoration:none}
+.nav__links a:hover{color:var(--ink)}
+
+/* ------------------------------------------------------ hero --- */
+.hero{padding-block:clamp(48px,7vw,84px) clamp(40px,6vw,68px)}
+/* Two printed objects flanking the pitch, as asked. They are the
+   page's only ornament, so they carry the product's own material. */
+.hero__row{display:grid;grid-template-columns:1fr minmax(0,640px) 1fr;align-items:center;gap:16px}
+.hero__mid{display:flex;flex-direction:column;gap:20px;align-items:center;text-align:center}
+.hero__mid .prose{align-items:center;text-align:center}
+.spin{width:100%;aspect-ratio:1;max-width:300px;justify-self:center}
+.spin canvas{display:block;width:100%;height:100%}
+.spin__cap{font-family:var(--mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-dim);text-align:center;margin-top:4px}
+@media (max-width:900px){
+  .hero__row{grid-template-columns:1fr}
+  /* Ornament is the first thing to go when space is short. */
+  .spin{display:none}
+}
+
+.cta{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:0 20px;min-height:44px;
+  font-family:var(--body);font-size:.82rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  text-decoration:none;border:1px solid var(--edge);border-radius:2px;color:var(--ink);
+  background:linear-gradient(180deg,var(--panel-lift),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(216,222,233,.13),0 2px 0 var(--hard),0 4px 10px rgba(0,0,0,.4);
+  transition:transform 120ms ease,box-shadow 120ms ease,border-color 120ms ease}
+.btn:hover{border-color:var(--frost);box-shadow:inset 0 1px 0 rgba(216,222,233,.13),0 2px 0 var(--hard),0 4px 10px rgba(0,0,0,.4),0 0 18px rgba(136,192,208,.22)}
+/* The application's signature press: the slab drops onto its shadow. */
+.btn:active{transform:translateY(2px);box-shadow:inset 0 2px 5px rgba(0,0,0,.45)}
+.btn--primary{color:var(--void);border-color:var(--frost);
+  background:linear-gradient(180deg,var(--frost),var(--frost-deep));
+  box-shadow:inset 0 1px 0 rgba(236,239,244,.4),0 2px 0 #3f5875,0 4px 14px rgba(94,129,172,.4)}
+.btn:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
+
+.freenote{font-family:var(--mono);font-size:.72rem;color:var(--ink-dim);letter-spacing:.03em}
+.freenote b{color:var(--good);font-weight:600}
+
+/* -------------------------------------------------- sections --- */
+section{padding-block:clamp(52px,7.5vw,82px);border-top:1px solid var(--edge-soft)}
+.stack{display:flex;flex-direction:column;gap:clamp(22px,3.6vw,34px)}
+
+.slabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.slab{padding:22px;border:1px solid var(--edge);
+  background:linear-gradient(180deg,var(--panel-lift),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(216,222,233,.09),0 2px 0 var(--hard),0 8px 20px rgba(0,0,0,.3);
+  display:flex;flex-direction:column;gap:9px;transition:transform 130ms ease,box-shadow 130ms ease}
+.slab:hover{transform:translateY(-2px);
+  box-shadow:inset 0 1px 0 rgba(216,222,233,.09),0 4px 0 var(--hard),0 14px 30px rgba(0,0,0,.42)}
+.slab p{font-size:.92rem}
+.slab .tick{font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase}
+
+/* The pain, stated as the reader would state it. */
+.pains{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:0;
+  border:1px solid var(--edge);background:var(--panel)}
+.pain{padding:22px;border-left:1px solid var(--edge-soft)}
+.pain:first-child{border-left:0}
+.pain q{display:block;font-size:1rem;color:var(--ink);font-style:italic;quotes:"\201C" "\201D"}
+.pain span{display:block;margin-top:10px;font-family:var(--mono);font-size:.68rem;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--frost)}
+@media (max-width:720px){.pain{border-left:0;border-top:1px solid var(--edge-soft)}.pain:first-child{border-top:0}}
+
+/* ------------------------------------------------------ tiers --- */
+.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.tier{padding:26px;border:1px solid var(--edge);background:var(--panel);
+  display:flex;flex-direction:column;gap:15px}
+.tier--pro{border-color:var(--frost-deep);box-shadow:0 0 0 1px rgba(94,129,172,.28),0 14px 34px rgba(0,0,0,.35)}
+.tier ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+.tier li{font-size:.93rem;padding-left:20px;position:relative}
+.tier li::before{content:"";position:absolute;left:0;top:.62em;width:8px;height:1px;background:var(--frost)}
+.badge{align-self:flex-start;font-family:var(--mono);font-size:.62rem;font-weight:600;letter-spacing:.15em;
+  text-transform:uppercase;padding:4px 9px;color:var(--void);background:var(--frost)}
+.badge--quiet{color:var(--ink-dim);background:none;border:1px solid var(--edge)}
+.price{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:1.5rem;color:var(--ink);font-weight:600}
+.price small{display:block;font-size:.7rem;font-weight:400;color:var(--ink-dim);letter-spacing:.04em;margin-top:4px}
+
+/* A plain aside, not a warning box. It is a fact about the download, and
+   dressing it in alarm colours would make it look worse than it is. */
+.note{max-width:var(--measure);padding:14px 16px;border:1px solid var(--edge-soft);
+  background:var(--panel);font-size:.85rem;line-height:1.6;color:var(--ink-dim)}
+.note b{color:var(--ink-body)}
+.note i{font-style:normal;font-family:var(--mono);font-size:.8rem;color:var(--frost)}
+
+/* ---------------------------------------------------- reviews --- */
+/* Hidden until the server hands over at least one approved review. There is
+   nothing to submit here on purpose -- the app does the asking, a person
+   reads every one, and only what its author released ever appears. */
+#reviews[hidden]{display:none}
+.reviews{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
+.review{padding:22px;border:1px solid var(--edge);background:var(--panel);
+  display:flex;flex-direction:column;gap:13px}
+.review__stars{font-size:.95rem;letter-spacing:.14em;color:var(--gold)}
+.review__stars span{color:var(--edge)}
+.review blockquote{margin:0;font-size:.97rem;line-height:1.6;color:var(--ink);
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.review__by{margin-top:auto;font-family:var(--mono);font-size:.7rem;letter-spacing:.05em;
+  color:var(--ink-dim);display:flex;flex-wrap:wrap;gap:4px 10px}
+.review__by b{color:var(--ink-body);font-weight:600}
+
+/* ------------------------------------------------------ table --- */
+/* Paths are long and must not widen the page, so the table scrolls in
+   its own container rather than pushing the body sideways. */
+.tablewrap{overflow-x:auto;border:1px solid var(--edge);background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.8rem;
+  font-variant-numeric:tabular-nums}
+caption{text-align:left;color:var(--ink-dim);font-size:.74rem;font-family:var(--body);
+  padding:14px 16px 12px;line-height:1.55}
+th,td{padding:10px 16px;text-align:left;border-bottom:1px solid var(--edge-soft)}
+td{white-space:nowrap}
+tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+thead th{font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-dim);
+  font-weight:500;border-bottom-color:var(--edge)}
+tbody th{font-weight:600;color:var(--ink);white-space:nowrap}
+
+/* ------------------------------------------------------- code --- */
+.terminal{border:1px solid var(--edge);background:var(--hard);overflow:hidden}
+.terminal__bar{display:flex;align-items:center;gap:8px;padding:9px 13px;background:var(--panel);
+  border-bottom:1px solid var(--edge)}
+/* Traffic lights, in Aurora rather than Apple's own hues -- the page is Nord
+   throughout and three imported reds would be the only foreign colour on it.
+   The inset ring keeps them reading as physical caps, like the application's
+   controls, rather than as flat dots. */
+.terminal__bar i{width:11px;height:11px;border-radius:50%;display:block;
+  box-shadow:inset 0 0 0 1px rgba(23,27,34,.45),inset 0 1px 0 rgba(236,239,244,.28)}
+.terminal__bar i:nth-child(1){background:var(--red)}
+.terminal__bar i:nth-child(2){background:var(--warn)}
+.terminal__bar i:nth-child(3){background:var(--good)}
+.terminal__bar span{margin-left:6px;font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-dim)}
+pre{margin:0;padding:18px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.8;color:var(--ink-body)}
+pre .c{color:var(--ink-dim)}
+pre .p{color:var(--frost)}
+
+/* ------------------------------------------------------ foot --- */
+footer{border-top:1px solid var(--edge-soft);padding-block:34px 44px}
+.foot__in{max-width:var(--wide);margin:0 auto;padding-inline:20px;display:flex;flex-wrap:wrap;
+  gap:18px 40px;align-items:center}
+footer small{font-family:var(--mono);font-size:.72rem;color:var(--ink-dim);letter-spacing:.03em}
+footer a{color:var(--frost);text-decoration:none}
+footer a:hover{text-decoration:underline}
+.foot__spacer{flex:1}
+
+a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.001ms!important;animation-duration:.001ms!important}}
+</style>
+
+<nav>
+  <div class="nav__in">
+    <a class="brand" href="#top">
+      <span class="brand__mark" aria-hidden="true">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 1.5 14 5v6l-6 3.5L2 11V5z"/><path d="M2 5l6 3.5L14 5M8 8.5V14.5"/>
+        </svg>
+      </span>
+      ST<em>Librarian</em>
+    </a>
+    <span class="nav__spacer"></span>
+    <div class="nav__links">
+      <a href="#what">What it does</a>
+      <a href="#server">For workshops</a>
+      <a href="#get">Download</a>
+      <a href="#docs">Docs</a>
+    </div>
+  </div>
+</nav>
+
+<div id="top" class="wrap">
+
+  <header class="hero">
+    <div class="hero__row">
+      <div>
+        <div class="spin" id="spin-cube" role="img" aria-label="A slowly rotating 20 millimetre XYZ calibration cube."></div>
+        <p class="spin__cap">XYZ cube &middot; 20 mm</p>
+      </div>
+
+      <div class="hero__mid">
+        <p class="eyebrow">A media library for 3D printing</p>
+        <h1>Find the model you already own.</h1>
+        <div class="prose">
+          <p class="lede">
+            You have gigabytes of STLs and no idea what is in them. STLibrarian scans the pile,
+            renders every model, groups the parts that belong together, and remembers what you printed.
+          </p>
+        </div>
+        <div class="cta">
+          <a class="btn btn--primary" href="#get">Download for macOS</a>
+          <a class="btn" href="#what">See what it does</a>
+        </div>
+        <p class="freenote"><b>Free.</b> Runs on your own machine &middot; no account, no server, nothing to sign up for</p>
+      </div>
+
+      <div>
+        <div class="spin" id="spin-gear" role="img" aria-label="A slowly rotating printed gear."></div>
+        <p class="spin__cap">Test gear &middot; 12 teeth</p>
+      </div>
+    </div>
+  </header>
+
+  <section id="what" class="stack">
+    <div class="prose">
+      <p class="eyebrow">The problem</p>
+      <h2>A folder is not a library</h2>
+    </div>
+    <div class="pains">
+      <div class="pain">
+        <q>I know I bought this one.</q>
+        <span>Search, by name or tag</span>
+      </div>
+      <div class="pain">
+        <q>Which of these four files is the body?</q>
+        <span>Parts grouped as one model</span>
+      </div>
+      <div class="pain">
+        <q>Have I printed this before?</q>
+        <span>Print history, per model</span>
+      </div>
+      <div class="pain">
+        <q>Why is this drive full?</q>
+        <span>Duplicates, found by content</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="stack">
+    <div class="prose">
+      <p class="eyebrow">What it does</p>
+      <h2>Point it at a folder. It does the rest.</h2>
+      <p>
+        Nothing is moved, renamed or deleted. Scanning reads your files and writes only to its
+        own database, so your folders stay exactly as you left them.
+      </p>
+    </div>
+    <div class="slabs">
+      <div class="slab">
+        <span class="tick" style="color:var(--frost)">Previews</span>
+        <h3>Every model, rendered</h3>
+        <p>Drawn on the machine holding the library, with no GPU and no browser needed. A three million triangle mini takes about two and a half seconds, at full detail.</p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--frost-pale)">Measurements</span>
+        <h3>Will it fit? What will it cost?</h3>
+        <p>Bounding box, triangle count and enclosed volume. Volume becomes grams of resin, and if the mesh has holes it says so instead of quoting a number it invented.</p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--violet)">Structure</span>
+        <h3>Packages, tags, collections</h3>
+        <p>Four files that are one dragon become one model. Supported and unsupported copies are recognised as the same thing. It proposes; you decide.</p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--good)">Print records</span>
+        <h3>What you actually made</h3>
+        <p>Printer, material, settings, outcome. Failures included, because how many attempts it took is the interesting part.</p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--warn)">Sliced files</span>
+        <h3>Print it again, exactly</h3>
+        <p>Save your slicer's output beside the model. Layer height, time and material are read from it, and a print record points at the file that ran.</p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--frost)">Your slicer</span>
+        <h3>One click to Lychee or Prusa</h3>
+        <p>Open any model in whatever handles it on your machine, including when the library lives on a NAS across the room.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="tiers" class="stack">
+    <div class="prose">
+      <p class="eyebrow">Two ways to run it</p>
+      <h2>Your bench, or the whole shop</h2>
+    </div>
+    <div class="tiers">
+      <div class="tier">
+        <span class="badge badge--quiet">Desktop</span>
+        <h3>One person, one disk</h3>
+        <ul>
+          <li>Reads your folders and never writes to them</li>
+          <li>Drag a folder onto the window to add it</li>
+          <li>Opens models in your slicer</li>
+          <li>No server, no account, nothing to administer</li>
+        </ul>
+        <p class="price">Free<small>Mac, Windows and Linux</small></p>
+      </div>
+      <div class="tier tier--pro">
+        <span class="badge">Server &middot; in testing</span>
+        <h3>A shared library on the NAS</h3>
+        <ul>
+          <li>Everything above, in a browser, for everyone</li>
+          <li>Accounts and roles; prints record who ran them</li>
+          <li>Collections shared with the shop, or kept to yourself</li>
+          <li>The only part allowed to rearrange files, and it shows you every move before it makes one</li>
+          <li>Point the desktop app at it and still open files in your local slicer</li>
+        </ul>
+        <p class="price">Free while testing<small>A one-time $19.99 for forever updates when it ships</small></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="reviews" class="stack" hidden>
+    <div class="prose">
+      <p class="eyebrow">From people running it</p>
+      <h2>What it is like in a real workshop</h2>
+      <p>
+        The app asks once, after you have a library worth having an opinion about.
+        Every review here was read by a person first, and only appears because
+        whoever wrote it said it could.
+      </p>
+    </div>
+    <div class="reviews" id="review-list"></div>
+  </section>
+
+  <section id="get" class="stack">
+    <div class="prose">
+      <p class="eyebrow">Download</p>
+      <h2>One app, on your machine</h2>
+      <p>
+        It reads the folders you already have and writes nothing to them. No server,
+        no account, nothing to administer. Open it, point it at your models, done.
+      </p>
+    </div>
+    <div class="cta" style="justify-content:flex-start">
+      <a class="btn btn--primary" href="https://github.com/dmattox10/stlibrarian-releases/releases/latest">macOS</a>
+      <a class="btn" href="https://github.com/dmattox10/stlibrarian-releases/releases/latest">Windows</a>
+      <a class="btn" href="https://github.com/dmattox10/stlibrarian-releases/releases/latest">Linux</a>
+    </div>
+    <p class="freenote">Free, and free to keep. No account, no telemetry.</p>
+
+    <p class="note">
+      <b>On Windows</b>, the installer is not code-signed, so SmartScreen will
+      say it does not recognise it. Click <i>More info</i> then <i>Run anyway</i>.
+      A certificate that actually removes that warning costs a few hundred a
+      year and buys nothing else, so the money goes into the software instead.
+      The Linux and macOS builds install normally.
+    </p>
+  </section>
+
+  <section id="docs" class="stack">
+    <div class="prose">
+      <p class="eyebrow">Docs</p>
+      <h2>Your library is one file. Back that up.</h2>
+      <p>
+        Everything you tell STLibrarian lives in a single SQLite file: tags, packages,
+        collections, print history, every correction you made by hand. Your models
+        stay where you keep them and are never copied into it.
+      </p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <caption>Where the library keeps itself. The app shows you this path, with a button to reveal it, under <strong>Backup</strong>.</caption>
+        <thead><tr><th scope="col">Platform</th><th scope="col">Folder</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">macOS</th><td>~/Library/Application&nbsp;Support/STLibrarian/</td></tr>
+          <tr><th scope="row">Linux</th><td>~/.local/share/STLibrarian/</td></tr>
+          <tr><th scope="row">Windows</th><td>%APPDATA%\STLibrarian\</td></tr>
+          <tr><th scope="row">Anywhere</th><td>STLIBRARIAN_DATA_DIR overrides all of the above</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="slabs">
+      <div class="slab">
+        <span class="tick" style="color:var(--frost)">Back up</span>
+        <h3>Copy <span class="num">stl.db</span></h3>
+        <p>
+          That is the whole library. The <span class="num">thumbnails/</span> folder beside it is
+          drawn from your models and rebuilds itself, so skipping it costs nothing but time.
+        </p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--warn)">Do it safely</span>
+        <h3>Close the app first</h3>
+        <p>
+          Or copy <span class="num">stl.db-wal</span> and <span class="num">stl.db-shm</span> with it.
+          Those hold writes not yet folded into the main file, and a copy without them can be a
+          moment stale.
+        </p>
+      </div>
+      <div class="slab">
+        <span class="tick" style="color:var(--good)">Restore</span>
+        <h3>Put it back and open it</h3>
+        <p>
+          If your models ended up somewhere else, the library will say so rather than looking
+          empty, and it can go and find them.
+        </p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3 style="font-size:1.2rem;margin-top:8px">When your models move</h3>
+      <p>
+        A restore onto a different machine, a library moved to a bigger disk, a share
+        remounted somewhere else: every stored path is wrong at once. Nothing is deleted for
+        being missing, because an unplugged drive must not empty your library. Instead
+        <strong>Missing files</strong> appears in the sidebar.
+      </p>
+      <p>
+        Point it at wherever the models are now and it matches them <strong>by content</strong>,
+        so renames and reorganised folders make no difference. It only opens files whose size
+        already matches something missing, so it is not re-reading your whole collection to
+        find a few strays.
+      </p>
+      <p>
+        For what searching cannot reach, such as a model re-exported at a different
+        resolution or a mesh you repaired, <strong>Locate</strong> points one model at one
+        file by hand. The
+        entry is then re-measured from that file, so its triangle count and volume describe
+        what is actually there.
+      </p>
+    </div>
+  </section>
+
+  <section id="server" class="stack">
+    <div class="prose">
+      <p class="eyebrow">Optional</p>
+      <h2>Running it for a workshop</h2>
+      <p>
+        Sharing one collection between several people? The same library runs on a NAS and
+        serves everyone a browser. In testing, and free while it is.
+      </p>
+    </div>
+    <div class="terminal">
+      <div class="terminal__bar" aria-hidden="true">
+        <i></i><i></i><i></i><span>Terminal</span>
+      </div>
+<pre><span class="c"># Build the web front end, then start the server</span>
+<span class="p">yarn</span> install &amp;&amp; <span class="p">yarn</span> build
+<span class="p">cd</span> src-tauri
+<span class="p">cargo</span> run --release --no-default-features \
+  --features server --bin stlibrarian-server
+
+<span class="c"># An administrator password is printed once, on first start.</span>
+<span class="c"># Then open http://your-nas:3000</span>
+</pre>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="foot__in">
+    <small>&copy; 2026 <a href="https://hyperspacemediagroup.com">Hyperspace Media Group</a>. All rights reserved.</small>
+    <span class="foot__spacer"></span>
+    <small>stlibrarian.com</small>
+  </div>
+</footer>
+
+<script>
+(function () {
+  if (typeof THREE === "undefined") return;
+
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // The application's own material and lighting, so a printed object on the
+  // marketing page looks like the same object inside the product.
+  function material() {
+    return new THREE.MeshStandardMaterial({
+      color: 0xc4d2d8, metalness: 0.0, roughness: 0.62, flatShading: true
+    });
+  }
+
+  function light(scene) {
+    scene.add(new THREE.AmbientLight(0xd8dee9, 0.5));
+    scene.add(new THREE.HemisphereLight(0xeceff4, 0x434c5e, 1.35));
+    var key = new THREE.DirectionalLight(0xffffff, 1.9); key.position.set(4, 7, 6); scene.add(key);
+    var fill = new THREE.DirectionalLight(0x8fbcbb, 0.8); fill.position.set(-5, 1, 4); scene.add(fill);
+    var rim = new THREE.DirectionalLight(0x5e81ac, 1.1); rim.position.set(-6, 2, -5); scene.add(rim);
+  }
+
+  /* A letter built from bars, so the cube needs no font file. */
+  function bar(w, h, d, x, y, rot) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material());
+    m.position.set(x, y, 0);
+    if (rot) m.rotation.z = rot;
+    return m;
+  }
+  function letter(which) {
+    var g = new THREE.Group(), t = 2.1, d = 1.6;
+    if (which === "X") { g.add(bar(t, 13, d, 0, 0, 0.5)); g.add(bar(t, 13, d, 0, 0, -0.5)); }
+    if (which === "Y") {
+      g.add(bar(t, 6.5, d, 0, -3.2, 0));
+      g.add(bar(t, 7.5, d, -2.1, 2.4, 0.52)); g.add(bar(t, 7.5, d, 2.1, 2.4, -0.52));
+    }
+    if (which === "Z") {
+      g.add(bar(11, t, d, 0, 5.4, 0)); g.add(bar(11, t, d, 0, -5.4, 0));
+      g.add(bar(t, 14, d, 0, 0, 0.68));
+    }
+    return g;
+  }
+
+  function calibrationCube() {
+    var g = new THREE.Group(), s = 20;
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(s, s, s), material()));
+    var face = s / 2 + 0.4;
+    var x = letter("X"); x.rotation.y = Math.PI / 2; x.position.x = face; g.add(x);
+    var y = letter("Y"); y.rotation.x = -Math.PI / 2; y.position.y = face; g.add(y);
+    var z = letter("Z"); z.position.z = face; g.add(z);
+    return g;
+  }
+
+  function gear() {
+    var teeth = 12, outer = 9.4, root = 7.6, hub = 3.1;
+    var shape = new THREE.Shape();
+    for (var i = 0; i < teeth; i++) {
+      var a = (i / teeth) * Math.PI * 2, step = (Math.PI * 2) / teeth;
+      // root, up the flank, across the tip, back down
+      var pts = [
+        [root, a], [outer, a + step * 0.10],
+        [outer, a + step * 0.40], [root, a + step * 0.50]
+      ];
+      for (var p = 0; p < pts.length; p++) {
+        var r = pts[p][0], ang = pts[p][1];
+        var px = Math.cos(ang) * r, py = Math.sin(ang) * r;
+        if (i === 0 && p === 0) shape.moveTo(px, py); else shape.lineTo(px, py);
+      }
+    }
+    shape.closePath();
+    var hole = new THREE.Path();
+    hole.absarc(0, 0, hub, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+    var geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 4.4, bevelEnabled: true, bevelSize: 0.45, bevelThickness: 0.45, bevelSegments: 2, curveSegments: 12
+    });
+    geo.center();
+    return new THREE.Mesh(geo, material());
+  }
+
+  function mount(id, build, tilt, dist) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch (e) {
+      host.style.display = "none";   // No WebGL: the page loses an ornament, nothing else.
+      return;
+    }
+    var size = host.clientWidth || 260;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(size, size, false);
+    host.appendChild(renderer.domElement);
+
+    var scene = new THREE.Scene();
+    light(scene);
+    var camera = new THREE.PerspectiveCamera(38, 1, 0.1, 400);
+    camera.position.set(0, dist * 0.24, dist);
+    camera.lookAt(0, 0, 0);
+
+    var obj = build();
+    obj.rotation.x = tilt;
+    scene.add(obj);
+
+    function resize() {
+      var w = host.clientWidth;
+      if (!w) return;
+      renderer.setSize(w, w, false);
+    }
+    window.addEventListener("resize", resize);
+
+    if (reduced) {
+      // Still shown, just not turning.
+      obj.rotation.y = 0.6;
+      renderer.render(scene, camera);
+      return;
+    }
+    (function tick() {
+      requestAnimationFrame(tick);
+      obj.rotation.y += 0.0055;
+      renderer.render(scene, camera);
+    })();
+  }
+
+  mount("spin-cube", calibrationCube, 0.32, 62);
+  mount("spin-gear", gear, 0.95, 34);
+})();
+</script>
+
+<script>
+/* Reviews are fetched, never baked in: what is on this page is exactly what is
+   approved on the server right now, and a review taken down is gone from here
+   on the next load. If the request fails -- offline, or this file opened from
+   somewhere that is not the site -- the section stays hidden rather than
+   showing an apology for content nobody promised. There is nothing to submit
+   here on purpose; the app does the asking. */
+(function () {
+  var section = document.getElementById("reviews");
+  var list = document.getElementById("review-list");
+  if (!section || !list) return;
+
+  function stars(n) {
+    var lit = Math.max(0, Math.min(5, n | 0));
+    var el = document.createElement("p");
+    el.className = "review__stars";
+    el.setAttribute("aria-label", lit + " out of 5");
+    el.textContent = "\u2605".repeat(lit);
+    if (lit < 5) {
+      var rest = document.createElement("span");
+      rest.textContent = "\u2605".repeat(5 - lit);
+      el.appendChild(rest);
+    }
+    return el;
+  }
+
+  function card(r) {
+    var article = document.createElement("article");
+    article.className = "review";
+    article.appendChild(stars(r.rating));
+
+    var quote = document.createElement("blockquote");
+    /* textContent, not innerHTML: this is a stranger's typing. */
+    quote.textContent = r.body;
+    article.appendChild(quote);
+
+    var by = document.createElement("p");
+    by.className = "review__by";
+    var who = document.createElement("b");
+    who.textContent = r.author || "Anonymous";
+    by.appendChild(who);
+    if (r.printer) {
+      var printer = document.createElement("span");
+      printer.textContent = r.printer;
+      by.appendChild(printer);
+    }
+    article.appendChild(by);
+    return article;
+  }
+
+  fetch("/api/reviews", { headers: { Accept: "application/json" } })
+    .then(function (res) { return res.ok ? res.json() : []; })
+    .then(function (rows) {
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      rows.slice(0, 6).forEach(function (r) { list.appendChild(card(r)); });
+      section.hidden = false;
+    })
+    .catch(function () { /* nothing to show, and that is not an error */ });
+})();
+</script>

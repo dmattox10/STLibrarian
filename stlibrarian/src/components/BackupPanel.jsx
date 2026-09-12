@@ -40,8 +40,8 @@ export default function BackupPanel({ api }) {
     >
       <div className="stack">
         <span className="dim" style={{ fontSize: 11, lineHeight: 1.5 }}>
-          Everything you have told this library — tags, packages, print history,
-          every correction — is in one file. Copy it and you have kept all of it.
+          Everything you have told this library is in one file: tags, packages,
+          print history, every correction. Copy it and you have kept all of it.
         </span>
 
         <div className="backup">
