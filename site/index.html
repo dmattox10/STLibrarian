@@ -111,6 +111,21 @@ section{padding-block:clamp(52px,7.5vw,82px);border-top:1px solid var(--edge-sof
 .slab p{font-size:.92rem}
 .slab .tick{font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase}
 
+/* Screenshots.
+   Stacked full width rather than side by side: these are shots of a dense
+   three column application, and at half the page width the file names and
+   measurements that are the entire point of showing them stop being legible.
+   Same frame as a slab so the page keeps one component language. */
+.shots{display:flex;flex-direction:column;gap:clamp(20px,3vw,32px)}
+.shot{margin:0;border:1px solid var(--edge);background:var(--panel);
+  box-shadow:inset 0 1px 0 rgba(216,222,233,.09),0 2px 0 var(--hard),0 10px 26px rgba(0,0,0,.34)}
+/* The intrinsic width/height on the img holds this box open before the JPEG
+   arrives, so nothing below it jumps when three lazy images land. */
+.shot img{display:block;width:100%;height:auto;border-bottom:1px solid var(--edge-soft)}
+.shot figcaption{padding:16px 20px;display:flex;flex-direction:column;gap:5px}
+.shot figcaption b{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--ink)}
+.shot figcaption span{font-size:.92rem}
+
 /* The pain, stated as the reader would state it. */
 .pains{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:0;
   border:1px solid var(--edge);background:var(--panel)}
@@ -204,6 +219,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     <span class="nav__spacer"></span>
     <div class="nav__links">
       <a href="#what">What it does</a>
+      <a href="#look">Screenshots</a>
       <a href="#server">For workshops</a>
       <a href="#get">Download</a>
       <a href="#docs">Docs</a>
@@ -309,6 +325,62 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
         <p>Open any model in whatever handles it on your machine, including when the library lives on a NAS across the room.</p>
       </div>
     </div>
+  </section>
+
+  <section id="look" class="stack">
+    <div class="prose">
+      <p class="eyebrow">What it looks like</p>
+      <h2>Three panes, no menus to learn</h2>
+      <p>
+        What you own down the left, the models in the middle, and everything known about one of
+        them on the right. Nothing below is a mockup: it is the application, rendering its own
+        measurements of real meshes.
+      </p>
+    </div>
+
+    <div class="shots">
+      <figure class="shot">
+        <img src="shots/library.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The library view: a grid of fourteen models, each with a rendered grey preview, its file size, triangle count and colour-coded tags. The left rail holds the folder to scan, a Packages panel proposing sets of files that look like one model, and collections with their counts.">
+        <figcaption>
+          <b>Every model, rendered</b>
+          <span>
+            Previews are drawn from the mesh by the machine holding the library, so a folder you
+            have never opened arrives already looking like something. Files that belong together
+            are proposed as one model; you decide.
+          </span>
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="shots/model.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="A spur gear selected and shown large in the viewer, with Solid, Wire and Points buttons beneath it. The details panel reads 768 triangles, bounds of 44 by 43.8 by 10 millimetres, a volume of 10.6 cubic centimetres, about 11.7 grams of resin, fits a 220 millimetre bed, printed once, mesh closed.">
+        <figcaption>
+          <b>Measured, not guessed</b>
+          <span>
+            Bounding box, triangle count and enclosed volume, turned into grams of resin and a
+            straight answer about whether it fits your bed. A mesh with holes says so instead of
+            quoting a number it invented.
+          </span>
+        </figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="shots/prints.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The print history for a knurled knob: two runs listed, one on a Prusa MK4 in PETG at 0.16 millimetres with four walls, one on a Bambu Lab P1S at 0.12 millimetres with five walls, each with a note about how it went.">
+        <figcaption>
+          <b>What you actually made</b>
+          <span>
+            Printer, material, settings and outcome, per run. Two goes at the same knob on two
+            machines, and the note that tells you which one to use next time. Failures are kept,
+            because how many attempts it took is the interesting part.
+          </span>
+        </figcaption>
+      </figure>
+    </div>
+
+    <p class="freenote">
+      Shown running as the shared server, which is why there is a sign-out button &mdash; the
+      desktop app is the same front end, built from the same source. The library in the shots is
+      a generated sample, so nobody else's models are on display.
+    </p>
   </section>
 
   <section id="tiers" class="stack">

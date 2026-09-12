@@ -36,6 +36,10 @@ jobs:
   desktop:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # Declared at job level, not on the step, because a step's `if` reads the
+    # env context from above it and cannot see the secrets context at all.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
     strategy:
       # One platform failing should not hide whether the others build.
       fail-fast: false
@@ -101,6 +105,19 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing and notarization. Every one of these is empty until
+          # the corresponding secret exists, and tauri-action signs only when
+          # they are set, so an unsigned build is the graceful default rather
+          # than a failure.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Only used to unlock the throwaway keychain the action makes on the
+          # runner. It protects nothing that outlives the job.
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'ci-ephemeral-keychain' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: stlibrarian
           args: --target ${{ matrix.target }}
@@ -122,6 +139,30 @@ jobs:
               cp "$f" out/
             done
           ls -la out
+
+      # Whether a build is signed is the kind of thing that is discovered by a
+      # user, months later, unless it is stated here.
+      - name: Report signing status
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            macos-*)
+              if [ -n "$APPLE_CERTIFICATE" ]; then
+                for app in $(find "stlibrarian/src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -name '*.app' 2>/dev/null); do
+                  codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tail -3 || true
+                  spctl --assess --type execute "$app" 2>&1 | tail -2 || true
+                done
+              else
+                echo "::warning::Unsigned macOS build. Gatekeeper will refuse it on download until APPLE_CERTIFICATE and the notarization secrets are set."
+              fi
+              ;;
+            windows-latest)
+              # Unsigned on purpose. An OV certificate would not silence
+              # SmartScreen anyway -- that needs EV plus accumulated
+              # reputation -- so it is a few hundred a year for nothing.
+              echo "Windows builds are unsigned by choice; the download page says so."
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v4
         with:
