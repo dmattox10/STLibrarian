@@ -275,6 +275,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: incoming
+          # Only the release artifacts, by name. The image job also uploads a
+          # buildx build record, and a release must not depend on being able
+          # to download something it does not want.
+          pattern: "{desktop-*,server-*}"
 
       - name: Flatten
         run: |
@@ -283,6 +287,16 @@ jobs:
             cp "$f" assets/
           done
           ls -la assets
+          # The download above is filtered by a glob. If that glob ever stops
+          # matching, every step here still succeeds and the result is a
+          # release with nothing in it -- a download page of dead buttons,
+          # which is worse than a failed build because it looks fine.
+          count=$(find assets -type f | wc -l)
+          echo "collected $count assets"
+          if [ "$count" -lt 6 ]; then
+            echo "::error::Expected at least 6 assets (4 desktop targets + 2 server), found $count. Refusing to publish a partial release." >&2
+            exit 1
+          fi
 
       - name: Publish
         env:
@@ -350,6 +364,11 @@ jobs:
       # A manual run builds the image and stops, matching the publish job: the
       # pipeline can be exercised without putting anything in front of anyone.
       - uses: docker/build-push-action@v6
+        # The build record is a buildx debugging aid, uploaded as an extra
+        # artifact of this run. Nothing consumes it, and it is what the
+        # publish job used to trip over.
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: stlibrarian
           platforms: linux/amd64,linux/arm64
