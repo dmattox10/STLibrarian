@@ -51,8 +51,17 @@ strong{color:var(--ink);font-weight:600}
 nav{border-bottom:1px solid var(--edge-soft);position:sticky;top:0;z-index:20;
   background:rgba(31,36,46,.86);backdrop-filter:blur(10px)}
 .nav__in{max-width:var(--wide);margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:14px}
+/* STLibrarian is one word, and the mark was reading "ST LIBRARIAN".
+   Two reasons, both here. The bare "ST" and the <em> were separate flex items
+   of .brand, so the 10px gap meant for the logo and the name was being set
+   between the two halves of the name as well -- a real space, not a tracking
+   artefact. Uppercase then removed the capital L that tells a reader where the
+   join is, and the colour change finished the job. So the name is now one flex
+   item, and it is set in sentence case: the two tones emphasise a word instead
+   of splitting one. */
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:800;
-  letter-spacing:.1em;text-transform:uppercase;font-size:.88rem;color:var(--ink);text-decoration:none}
+  color:var(--ink);text-decoration:none}
+.brand__word{font-size:1.06rem;letter-spacing:-.015em;white-space:nowrap}
 .brand em{font-style:normal;color:var(--frost)}
 .brand__mark{width:26px;height:26px;flex:none;display:grid;place-items:center;color:var(--void);
   background:linear-gradient(160deg,var(--frost),var(--frost-deep));
@@ -61,6 +70,22 @@ nav{border-bottom:1px solid var(--edge-soft);position:sticky;top:0;z-index:20;
 .nav__links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px 20px;font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase}
 .nav__links a{color:var(--ink-dim);text-decoration:none}
 .nav__links a:hover{color:var(--ink)}
+/* On a phone the five links wrap to four lines beside the mark and a sticky
+   bar eats a third of the screen. Break them onto their own row and let that
+   row scroll sideways, so the bar is two lines tall whatever is in it. */
+@media (max-width:700px){
+  .nav__in{flex-wrap:wrap;gap:9px;padding:11px 20px 9px}
+  .nav__spacer{display:none}
+  .nav__links{width:100%;flex-wrap:nowrap;justify-content:flex-start;gap:0 18px;
+    overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;padding-bottom:1px}
+  .nav__links::-webkit-scrollbar{display:none}
+  .nav__links a{white-space:nowrap}
+  /* The strip scrolls, so it must look like it does: the last link fades at
+     the edge rather than stopping dead as if it were the last one. */
+  .nav__links{-webkit-mask-image:linear-gradient(to right,#000 86%,transparent);
+    mask-image:linear-gradient(to right,#000 86%,transparent)}
+}
 
 /* ------------------------------------------------------ hero --- */
 .hero{padding-block:clamp(48px,7vw,84px) clamp(40px,6vw,68px)}
@@ -75,8 +100,15 @@ nav{border-bottom:1px solid var(--edge-soft);position:sticky;top:0;z-index:20;
   color:var(--ink-dim);text-align:center;margin-top:4px}
 @media (max-width:900px){
   .hero__row{grid-template-columns:1fr}
-  /* Ornament is the first thing to go when space is short. */
-  .spin{display:none}
+  /* Ornament is the first thing to go when space is short. The caption goes
+     with it, or the page carries two labels for objects that are not there. */
+  .spin,.spin__cap{display:none}
+}
+/* Mono at .2em tracking is set for a desktop column. On a phone the eyebrow
+   runs to the edge and the free note breaks mid phrase, so both come in. */
+@media (max-width:560px){
+  .eyebrow{font-size:.64rem;letter-spacing:.13em}
+  .freenote{font-size:.68rem;letter-spacing:0}
 }
 
 .cta{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
@@ -121,8 +153,27 @@ section{padding-block:clamp(52px,7.5vw,82px);border-top:1px solid var(--edge-sof
   box-shadow:inset 0 1px 0 rgba(216,222,233,.09),0 2px 0 var(--hard),0 10px 26px rgba(0,0,0,.34)}
 /* The intrinsic width/height on the img holds this box open before the JPEG
    arrives, so nothing below it jumps when three lazy images land. */
-.shot img{display:block;width:100%;height:auto;border-bottom:1px solid var(--edge-soft)}
+.shot__pan{border-bottom:1px solid var(--edge-soft)}
+.shot__pan img{display:block;width:100%;height:auto}
 .shot figcaption{padding:16px 20px;display:flex;flex-direction:column;gap:5px}
+.shot__hint{display:none;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--frost);align-items:center;gap:7px}
+.shot__hint::after{content:"\2192";font-size:.85rem;letter-spacing:0}
+
+/* A three pane desktop application is 800 points wide. Fitted to a 350 point
+   phone it is a grey rectangle: the file names, the triangle counts and the
+   measurements that are the whole reason to show the screen stop being
+   letters. So on a phone the shot keeps the size it needs to be read and the
+   frame scrolls across it instead, and is capped in height so a 16:10 screen
+   does not take the whole page. Nothing is resampled and nothing is cropped
+   away that panning cannot reach, except the empty chassis below the fold. */
+@media (max-width:760px){
+  .shot__pan{overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;
+    scrollbar-width:thin;scrollbar-color:var(--edge) var(--panel)}
+  .shot__pan img{width:900px;max-width:none;height:min(56vh,420px);
+    object-fit:cover;object-position:left top}
+  .shot__hint{display:flex}
+}
 .shot figcaption b{font-family:var(--display);font-weight:700;font-size:1rem;color:var(--ink)}
 .shot figcaption span{font-size:.92rem}
 
@@ -180,6 +231,16 @@ tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
 thead th{font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-dim);
   font-weight:500;border-bottom-color:var(--edge)}
 tbody th{font-weight:600;color:var(--ink);white-space:nowrap}
+/* nowrap is what keeps a path on one line on a desktop, and what makes this
+   table 500 points wide on a phone: the frame then scrolls, the caption is
+   cut off inside it, and half the paths are off screen with nothing saying
+   so. A path broken over two lines is still a path, so on a phone it breaks
+   and the table fits the page instead. */
+@media (max-width:640px){
+  table{font-size:.74rem}
+  th,td{padding:9px 12px}
+  td,tbody th{white-space:normal;overflow-wrap:anywhere}
+}
 
 /* ------------------------------------------------------- code --- */
 .terminal{border:1px solid var(--edge);background:var(--hard);overflow:hidden}
@@ -199,6 +260,15 @@ tbody th{font-weight:600;color:var(--ink);white-space:nowrap}
 pre{margin:0;padding:18px;overflow-x:auto;font-family:var(--mono);font-size:.8rem;line-height:1.8;color:var(--ink-body)}
 pre .c{color:var(--ink-dim)}
 pre .p{color:var(--frost)}
+/* The longest command is 44 characters. At .72rem it fits a phone, so the
+   block reads whole rather than scrolling a build command out of sight. */
+@media (max-width:560px){
+  pre{font-size:.72rem;padding:14px 15px;line-height:1.7}
+  /* The commands fit at this size and stay unbroken, which is what matters in
+     a block meant to be copied. The comments are longer than any phone, so
+     they are the one thing here allowed to wrap. */
+  pre .c{white-space:pre-wrap}
+}
 
 /* ------------------------------------------------------ foot --- */
 footer{border-top:1px solid var(--edge-soft);padding-block:34px 44px}
@@ -222,7 +292,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
           <path d="M8 1.5 14 5v6l-6 3.5L2 11V5z"/><path d="M2 5l6 3.5L14 5M8 8.5V14.5"/>
         </svg>
       </span>
-      ST<em>Librarian</em>
+      <span class="brand__word">ST<em>Librarian</em></span>
     </a>
     <span class="nav__spacer"></span>
     <div class="nav__links">
@@ -348,9 +418,12 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
 
     <div class="shots">
       <figure class="shot">
-        <img src="shots/library.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The library view: a grid of fourteen models, each with a rendered grey preview, its file size, triangle count and colour-coded tags. The left rail holds the folder to scan, a Packages panel proposing sets of files that look like one model, and collections with their counts.">
+        <div class="shot__pan">
+          <img src="shots/library.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The library view: a grid of fourteen models, each with a rendered grey preview, its file size, triangle count and colour-coded tags. The left rail holds the folder to scan, a Packages panel proposing sets of files that look like one model, and collections with their counts.">
+        </div>
         <figcaption>
           <b>Every model, rendered</b>
+          <span class="shot__hint">Drag to read the screen</span>
           <span>
             Previews are drawn from the mesh by the machine holding the library, so a folder you
             have never opened arrives already looking like something. Files that belong together
@@ -360,9 +433,12 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
       </figure>
 
       <figure class="shot">
-        <img src="shots/model.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="A spur gear selected and shown large in the viewer, with Solid, Wire and Points buttons beneath it. The details panel reads 768 triangles, bounds of 44 by 43.8 by 10 millimetres, a volume of 10.6 cubic centimetres, about 11.7 grams of resin, fits a 220 millimetre bed, printed once, mesh closed.">
+        <div class="shot__pan">
+          <img src="shots/model.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="A spur gear selected and shown large in the viewer, with Solid, Wire and Points buttons beneath it. The details panel reads 768 triangles, bounds of 44 by 43.8 by 10 millimetres, a volume of 10.6 cubic centimetres, about 11.7 grams of resin, fits a 220 millimetre bed, printed once, mesh closed.">
+        </div>
         <figcaption>
           <b>Measured, not guessed</b>
+          <span class="shot__hint">Drag to read the screen</span>
           <span>
             Bounding box, triangle count and enclosed volume, turned into grams of resin and a
             straight answer about whether it fits your bed. A mesh with holes says so instead of
@@ -372,9 +448,12 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
       </figure>
 
       <figure class="shot">
-        <img src="shots/prints.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The print history for a knurled knob: two runs listed, one on a Prusa MK4 in PETG at 0.16 millimetres with four walls, one on a Bambu Lab P1S at 0.12 millimetres with five walls, each with a note about how it went.">
+        <div class="shot__pan">
+          <img src="shots/prints.jpg" width="1600" height="1000" loading="lazy" decoding="async" alt="The print history for a knurled knob: two runs listed, one on a Prusa MK4 in PETG at 0.16 millimetres with four walls, one on a Bambu Lab P1S at 0.12 millimetres with five walls, each with a note about how it went.">
+        </div>
         <figcaption>
           <b>What you actually made</b>
+          <span class="shot__hint">Drag to read the screen</span>
           <span>
             Printer, material, settings and outcome, per run. Two goes at the same knob on two
             machines, and the note that tells you which one to use next time. Failures are kept,
