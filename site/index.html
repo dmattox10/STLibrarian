@@ -12,6 +12,10 @@
   gtag('js', new Date());
   gtag('config', 'G-5938JXKBWN');
 </script>
+
+<!-- The event layer every site on this box shares. Loaded in the head, before
+     the page's own scripts, so window.SA exists by the time anything uses it. -->
+<script src="analytics.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -351,7 +355,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </div>
   </header>
 
-  <section id="what" class="stack">
+  <section id="what" class="stack" data-section="what">
     <div class="prose">
       <p class="eyebrow">The problem</p>
       <h2>A folder is not a library</h2>
@@ -419,7 +423,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </div>
   </section>
 
-  <section id="look" class="stack">
+  <section id="look" class="stack" data-section="look">
     <div class="prose">
       <p class="eyebrow">What it looks like</p>
       <h2>Three panes, no menus to learn</h2>
@@ -484,7 +488,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </p>
   </section>
 
-  <section id="tiers" class="stack">
+  <section id="tiers" class="stack" data-section="tiers">
     <div class="prose">
       <p class="eyebrow">Two ways to run it</p>
       <h2>Your bench, or the whole shop</h2>
@@ -516,7 +520,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </div>
   </section>
 
-  <section id="reviews" class="stack" hidden>
+  <section id="reviews" class="stack" data-section="reviews" hidden>
     <div class="prose">
       <p class="eyebrow">From people running it</p>
       <h2>What it is like in a real workshop</h2>
@@ -529,7 +533,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     <div class="reviews" id="review-list"></div>
   </section>
 
-  <section id="get" class="stack">
+  <section id="get" class="stack" data-section="get">
     <div class="prose">
       <p class="eyebrow">Download</p>
       <h2>One app, on your machine</h2>
@@ -570,7 +574,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </div>
   </section>
 
-  <section id="docs" class="stack">
+  <section id="docs" class="stack" data-section="docs">
     <div class="prose">
       <p class="eyebrow">Docs</p>
       <h2>Your library is one file. Back that up.</h2>
@@ -646,7 +650,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
     </div>
   </section>
 
-  <section id="server" class="stack">
+  <section id="server" class="stack" data-section="server">
     <div class="prose">
       <p class="eyebrow">Optional</p>
       <h2>Running it for a workshop</h2>
@@ -869,6 +873,59 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
       section.hidden = false;
     })
     .catch(function () { /* nothing to show, and that is not an error */ });
+})();
+</script>
+
+<script>
+/* What this page is for is getting somebody to download the app, and until
+   now GA could not tell a visitor who read every word from one who bounced
+   off the hero -- there is no form here, no checkout, and the download
+   buttons leave for GitHub, so the click was the last thing the property ever
+   saw and it recorded nothing.
+
+   There is deliberately no `purchase` event. The desktop app is free and the
+   server tier is not shipping yet; the $19.99 on the tiers section is a
+   stated future price, not a transaction. When it does ship, the download
+   below is where begin_checkout belongs. */
+(function () {
+  if (!window.SA) return;
+
+  SA.initScrollDepth();
+  SA.initSectionEngagement();
+
+  /* The two tiers, as the catalogue this page is really showing. */
+  SA.viewItemList([
+    { item_id: 'desktop', item_name: 'Desktop (one person, one disk)', price: 0, item_category: 'tier' },
+    { item_id: 'server', item_name: 'Server (shared library)', price: 19.99, item_category: 'tier' }
+  ], 'Tiers');
+
+  /* Every download button opens the same releases page, so the platform is
+     the only thing that distinguishes them -- and it is the thing worth
+     knowing, since the Windows and Linux first-run stories are different and
+     worse. */
+  document.querySelectorAll('#get .cta a').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var platform = (el.textContent || '').trim().toLowerCase();
+      SA.track('download_click', { platform: platform });
+      SA.trackOutbound(el.href, 'download_' + platform);
+    });
+  });
+
+  /* Anchor navigation is the only other intent signal on a one-page site:
+     which section somebody chose to jump to says what they came for. */
+  document.querySelectorAll('nav a[href^="#"], .btn[href^="#"]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      SA.track('nav_click', { target: el.getAttribute('href').slice(1) });
+    });
+  });
+
+  /* Docs and GitHub links leave the site; without this they are invisible. */
+  document.querySelectorAll('a[href^="http"]').forEach(function (el) {
+    if (el.closest('#get .cta')) return; /* already counted above */
+    el.addEventListener('click', function () {
+      SA.trackOutbound(el.href, (el.textContent || '').trim().slice(0, 60));
+    });
+  });
 })();
 </script>
 
