@@ -200,47 +200,27 @@ so a review comes from somebody who actually runs it.
 
 ## Releasing
 
-This repository is private, and release assets on a private repo need a token
-to download, which a download button on a website cannot supply. So the source
-stays here and only the built artifacts cross over to a **separate public
-repository** that holds releases and nothing else.
-
-`tools/setup-releases.sh` checks every piece and tells you what is missing.
-Run it any time; it changes nothing unless you ask it to.
-
-The public repository, `dmattox10/stlibrarian-releases`, already exists and
-holds builds only. What remains is a token, because GitHub has no API that
-mints one: make a **fine-grained** token at
-<https://github.com/settings/personal-access-tokens/new>, scoped to *that
-repository only* with **Contents: read and write**, then
-
-```bash
-gh secret set RELEASES_TOKEN --repo dmattox10/STLibrarian
-```
-
-and paste it. Scoped that way it cannot read this repository, which is the
-point of using one rather than a token that reaches everything you own.
-
-To check the token really works before trusting it to a midnight release:
-
-```bash
-RELEASES_TOKEN=github_pat_... tools/setup-releases.sh
-```
-
-That cuts a throwaway draft release in the public repo and deletes it again. A
-draft is visible to nobody and notifies nobody.
-
-Then a release is a tag:
+A release is a tag, and the builds land on this repository's own releases page,
+beside the source they were built from:
 
 ```bash
 # bump the version in package.json, src-tauri/Cargo.toml and tauri.conf.json
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-One caveat while this work is on a branch: `workflow_dispatch` only registers
-a workflow that exists on the default branch, so the manual run is unavailable
-until it lands on `main`. Tag-triggered runs use the workflow as it exists at
-the tagged commit, so tagging a branch works today.
+Nothing has to be set up first. `GITHUB_TOKEN` can write releases on its own
+repository, so there is no secret to mint, scope, test or renew.
+
+It was not always this simple. While this repository was private its release
+assets needed a token to download, which a download button on a website cannot
+supply, so the builds crossed to a separate public repository carried by a
+fine-grained PAT. Going MIT removed the problem rather than the workaround:
+`dmattox10/stlibrarian-releases` keeps the releases up to v0.1.2 and now points
+here, and `RELEASES_TOKEN` is read by nothing and can be deleted.
+
+`tools/check-release-setup.sh` says what a tag would do right now: whether this
+repository is still public, which signing secrets are in place, and whether
+that old token is still sitting there. It changes nothing.
 
 `.github/workflows/release.yml` runs the test suites on every platform, builds
 the desktop bundles for macOS (both architectures), Windows and Linux, builds
@@ -261,7 +241,7 @@ these are worth the money.
 
 The pipeline signs only when the secrets exist. Until then it keeps producing
 unsigned builds and prints a warning in the run log saying so, rather than
-failing. `tools/setup-releases.sh` reports exactly which half is configured.
+failing. `tools/check-release-setup.sh` reports exactly which half is configured.
 
 ### macOS
 
@@ -332,7 +312,7 @@ Nothing to do. AppImage, `.deb` and `.rpm` are all installable unsigned.
 `tools/setup-signing-macos.sh` sets them. To check what landed at any time:
 
 ```bash
-tools/setup-releases.sh
+tools/check-release-setup.sh
 ```
 
 ### Until the macOS certificate exists

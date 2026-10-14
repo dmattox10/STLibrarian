@@ -57,9 +57,11 @@ in the main README.
 
 ## Downloads
 
-The three buttons point at `github.com/dmattox10/stlibrarian-releases`, which
-is the public releases repository -- the source repo is private and its assets
-cannot be fetched without a token. See "Releasing" in the main README.
+The three buttons point at `github.com/dmattox10/STLibrarian/releases/latest`,
+the source repository's own releases page. They used to point at a separate
+`stlibrarian-releases` repo, because a private repo's assets cannot be fetched
+without a token and a download button has none to offer; the source is public
+now, so the builds sit next to it. See "Releasing" in the main README.
 
 ## A note on encoding
 
