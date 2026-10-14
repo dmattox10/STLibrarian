@@ -5,10 +5,11 @@ everything inside, renders a preview of each model, and lets you tag, search and
 browse the result — Plex, for the pile of models you have downloaded and never
 found again.
 
-It runs two ways from one codebase:
+Free software, MIT licensed, both ways you can run it. There is no paid tier and
+nothing to buy. It runs two ways from one codebase:
 
 - **Desktop** — a Tauri app over your local disk. No accounts, no server.
-- **Pro** — the same library on a NAS, served to a browser, with real users.
+- **Server** — the same library on a NAS, served to a browser, with real users.
 
 ## Running it
 
@@ -191,7 +192,7 @@ is a review**, **an administrator approved it**, and **its author ticked the
 publish box**. Approving one the author withheld files it as read. A problem
 report is never a testimonial however warmly it is worded, and the public shape
 carries no contact details and no status at all. The moderation queue is under
-**Feedback** in a Pro sidebar, administrators only.
+**Feedback** in the server sidebar, administrators only.
 
 The website reads `/api/reviews` at load and stays hidden when it is empty.
 There is no submission form on the site on purpose -- the app does the asking,
@@ -348,7 +349,7 @@ src/
     adapter.js     picks one at startup
     tauri.js       desktop, over Tauri IPC
     electron.js    desktop, over a preload bridge
-    http.js        Pro, over HTTP
+    http.js        server, over HTTP
   theme/         Nord palette and the game-HUD control set
   components/    the UI. None of it knows which adapter it got.
   lib/           three.js rendering, the thumbnail queue, formatting
@@ -357,7 +358,7 @@ src-tauri/src/
   core/          shared by both binaries, depends on neither
     db.rs          SQLite: models, tags, collections, packages, prints, users
     raster.rs      software renderer -- previews with no GPU
-    organize.rs    the only code that writes to your files (Pro)
+    organize.rs    the only code that writes to your files (server only)
     scanner.rs     streaming walk and hash
     stl.rs         triangle count and bounding box, streaming
     auth.rs        argon2 passwords, session tokens
@@ -370,7 +371,7 @@ src-tauri/src/
 
 Everything above `src/data/` is written against one small interface. Swapping
 Tauri for Electron means writing a main process and using the adapter that is
-already there — not rewriting the app. The Pro build needs the HTTP adapter
+already there — not rewriting the app. The server build needs the HTTP adapter
 regardless, so the seam had to exist anyway.
 
 ### Why the server is a separate binary
@@ -430,7 +431,7 @@ it, and hands it to whatever opens that format here.
 That is the shape a workshop actually has: the library on a NAS, the printers
 and slicers at workstations.
 
-## Pro: people
+## Server: people
 
 Two roles. An administrator scans, organises, deletes models and manages
 people; everyone else browses, tags, collects and logs prints. More roles than
@@ -448,13 +449,13 @@ Tags and packages are shared -- they are the library's own structure. A
 collection can be either: shared by default, or just for you, which is the
 difference between the shop's shelves and somebody's print queue.
 
-## Pro: organising files on disk
+## Server: organising files on disk
 
 Everything above is metadata. Scanning reads and never writes, so the desktop
 client is a front end over a database and your folders are left exactly as they
 are.
 
-Rearranging files for real is the Pro server's job. It files models as
+Rearranging files for real is the server's job. It files models as
 `creator / model / variant`, plans every move before making one, never
 overwrites anything, and recomputes the plan itself rather than trusting one
 sent by a client. It exists once, on the server, rather than once per desktop
