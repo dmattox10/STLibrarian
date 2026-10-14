@@ -1,20 +1,22 @@
 # Builds every desktop bundle and the headless server binary, then publishes
-# them to a SEPARATE PUBLIC repository.
+# them as a release on this repository.
 #
-# Why the second repository: this one is private, and release assets on a
-# private repo need a token to download -- a download button on a website
-# cannot supply one. So the source stays here and only the built artifacts
-# cross over, where anybody can fetch them without an account.
+# This used to publish to a second public repository, dmattox10/stlibrarian-releases,
+# because this one was private and release assets on a private repo need a
+# token to download, which a download button on a website cannot supply. The
+# source is public and MIT licensed now, so that detour has nothing left to
+# solve: the tag, the source it was cut from and the binaries it produced all
+# sit in one place. The old repository keeps its releases up to v0.1.2 and
+# points here.
 #
 # What has to exist before this works:
-#   1. A public repo, by default dmattox10/stlibrarian-releases, with no
-#      source in it. It only ever holds releases.
-#   2. A secret RELEASES_TOKEN on THIS repo: a fine-grained personal access
-#      token scoped to that one repository, with Contents: read and write.
-#      Nothing else. It cannot read this repository's source.
-#   3. For the container image only: ghcr.io/<owner>/stlibrarian set to public
-#      once, under Packages -> Package settings. Same reason as the releases
-#      repo -- a NAS running `docker compose pull` has no login to give.
+#   1. For the release itself, nothing. The built-in GITHUB_TOKEN can write
+#      releases on its own repository, which is why the publish job below asks
+#      for `contents: write` and no secret at all. RELEASES_TOKEN is no longer
+#      read by anything and can be deleted.
+#   2. For the container image only: ghcr.io/<owner>/stlibrarian set to public
+#      once, under Packages -> Package settings. A NAS running
+#      `docker compose pull` has no login to give.
 #
 # To cut a release: bump the version in three places (package.json,
 # src-tauri/Cargo.toml, src-tauri/tauri.conf.json), commit, then
@@ -31,9 +33,6 @@ on:
         description: "Build only; publish nothing"
         type: boolean
         default: true
-
-env:
-  RELEASES_REPO: dmattox10/stlibrarian-releases
 
 jobs:
   desktop:
@@ -141,7 +140,7 @@ jobs:
           # finished in 0.4s, reported "No artifacts were found", and the
           # collect step below then failed on a bundle directory that was
           # never created. What keeps a release from being cut is passing no
-          # tagName -- the job below publishes, to the other repository.
+          # tagName -- the publish job below is what does that.
           includeRelease: true
           includeDebug: false
 
@@ -265,12 +264,16 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish to the public releases repo
+    name: Publish the release
     needs: [desktop, server]
     runs-on: ubuntu-latest
     # Only a tag publishes. A manual run builds and stops, so the pipeline can
     # be exercised without putting anything in front of anybody.
     if: startsWith(github.ref, 'refs/tags/v')
+    # Write on this one repository, for this one job, from a token that expires
+    # with the run. That is the whole of what replaced the scoped PAT.
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -300,33 +303,26 @@ jobs:
 
       - name: Publish
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "RELEASES_TOKEN is not set -- see the comment at the top of this file." >&2
-            exit 1
-          fi
-          # The public repo has no source and therefore no matching commit, so
-          # the release is cut against its default branch and carries only the
-          # tag name.
           cat > notes.md <<'NOTES'
           Desktop builds for macOS, Windows and Linux, and the headless server for a NAS.
 
-          Source lives in a private repository; these are the builds it produces.
+          Built by CI from this tag. The source it was built from is right here, MIT licensed.
           NOTES
           # The heredoc above is indented to stay inside this block, so strip it.
           sed -i 's/^          //' notes.md
 
-          # The public repo has no source and therefore no matching commit, so
-          # the release is cut against its default branch and carries only the
-          # tag name. A re-run of the same tag updates the assets in place.
+          # The tag is in this repository now, so the release attaches to the
+          # commit it was cut from and a reader can diff two releases. A re-run
+          # of the same tag updates the assets in place.
           gh release create "$TAG" \
-            --repo "$RELEASES_REPO" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "STLibrarian $TAG" \
             --notes-file notes.md \
             assets/* \
-          || gh release upload "$TAG" --repo "$RELEASES_REPO" --clobber assets/*
+          || gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
 
   image:
     name: Container image

@@ -157,7 +157,7 @@ TEXT
 fi
 
 say "Where that leaves things"
-"$(dirname "$0")/setup-releases.sh" || true
+"$(dirname "$0")/check-release-setup.sh" || true
 
 cat <<'TEXT'
 
