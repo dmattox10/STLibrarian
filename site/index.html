@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>STLibrarian</title>
 
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-96x96.png" type="image/png" sizes="96x96">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+
 <meta name="description" content="STLibrarian catalogues a 3D printing STL collection: tag and search your models, see what you have printed, and find a file without opening twelve folders." />
 <meta name="robots" content="index, follow" />
 <link rel="canonical" href="https://stlibrarian.com/" />
@@ -41,7 +45,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <style>
 /* ============================================================
@@ -710,6 +714,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
 </footer>
 
 <script>
+document.addEventListener("DOMContentLoaded", function () {
 (function () {
   if (typeof THREE === "undefined") return;
 
@@ -837,6 +842,7 @@ a:focus-visible{outline:2px solid var(--frost);outline-offset:3px}
   mount("spin-cube", calibrationCube, 0.32, 62);
   mount("spin-gear", gear, 0.95, 34);
 })();
+});
 </script>
 
 <script>
